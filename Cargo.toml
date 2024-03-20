@@ -1,0 +1,10 @@
+[package]
+name = "trale"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.81"
+async-lock = "3.3.0"
+nix = { version = "0.28.0", features = ["event", "time"] }
+slab = "0.4.9"
