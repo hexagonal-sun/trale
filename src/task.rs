@@ -113,6 +113,14 @@ impl Executor {
                 run_q.pop().unwrap()
             };
 
+
+            // It looks odd to put the task back on the waitqueue
+            // before we call poll(). However this is needed to
+            // prevent a race condition.  If `poll()` on the future
+            // adds an fd to the reactor, that thread may attempt to
+            // remove us from the waitqueue before this thread has
+            // placed us in it.  It would reference an invalid `id`
+            // this this would only be set *after* the call to poll.
             let task = {
                 let mut waiting = executor.waiting.lock().unwrap();
 
