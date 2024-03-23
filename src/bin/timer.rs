@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use trale::{task::Executor, timer::Timer};
+use trale::{futures::timer::Timer, task::Executor};
 
 fn main() {
     let task1 = Executor::spawn(async {

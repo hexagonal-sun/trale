@@ -9,6 +9,11 @@ pub struct Reactor {
     poll: Poll<Waker>,
 }
 
+pub enum WakeupKind {
+    Readable,
+    Writable,
+}
+
 impl Reactor {
     pub fn get() -> &'static Self {
         static REACTOR: OnceCell<Reactor> = OnceCell::new();
@@ -20,8 +25,8 @@ impl Reactor {
         })
     }
 
-    pub fn register_waker(&self, fd: Arc<dyn AsFd + Send + Sync>, waker: Waker) {
-        self.poll.insert(fd, waker);
+    pub fn register_waker(&self, fd: Arc<dyn AsFd + Send + Sync>, waker: Waker, kind: WakeupKind) {
+        self.poll.insert(fd, waker, kind);
     }
 
     fn reactor_loop() -> ! {

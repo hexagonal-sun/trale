@@ -6,6 +6,8 @@ use std::{
 use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags, EpollTimeout};
 use slab::Slab;
 
+use super::WakeupKind;
+
 pub struct Subscription<T: Send + Sync> {
     fd: Arc<dyn AsFd + Send + Sync>,
     data: T,
@@ -24,7 +26,7 @@ impl<T: Send + Sync> Poll<T> {
         }
     }
 
-    pub fn insert(&self, fd: Arc<dyn AsFd + Send + Sync>, data: T) {
+    pub fn insert(&self, fd: Arc<dyn AsFd + Send + Sync>, data: T, kind: WakeupKind) {
         let mut slab = self.wakers.lock().unwrap();
         let entry = slab.vacant_entry();
         let sub = Subscription {
@@ -32,10 +34,12 @@ impl<T: Send + Sync> Poll<T> {
             data,
         };
 
-        let mut flags = EpollFlags::EPOLLIN;
-        flags.set(EpollFlags::EPOLLET, true);
+        let flags = match kind {
+            WakeupKind::Readable => EpollFlags::EPOLLIN,
+            WakeupKind::Writable => EpollFlags::EPOLLOUT,
+        };
 
-        let epoll_event = EpollEvent::new(flags, entry.key() as u64,);
+        let epoll_event = EpollEvent::new(flags, entry.key() as u64);
         self.epoll.add(fd.as_fd(), epoll_event).unwrap();
 
         entry.insert(sub);
@@ -50,9 +54,7 @@ impl<T: Send + Sync> Poll<T> {
         {
             let mut slab = self.wakers.lock().unwrap();
             let subscription = slab.remove(event[0].data() as usize);
-            self.epoll
-                .delete(subscription.fd.as_fd())
-                .unwrap();
+            self.epoll.delete(subscription.fd.as_fd()).unwrap();
 
             subscription.data
         }

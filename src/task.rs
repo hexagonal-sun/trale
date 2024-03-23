@@ -125,7 +125,6 @@ impl Executor {
                 task
             };
 
-
             let waker = Waker::from(task.clone());
             let mut cx = Context::from_waker(&waker);
 

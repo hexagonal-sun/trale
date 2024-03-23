@@ -1,5 +1,9 @@
 use std::{
-    future::Future, pin::Pin, sync::Arc, task::{Context, Poll}, time::{Duration, Instant}
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::{Duration, Instant},
 };
 
 use nix::sys::{
@@ -7,7 +11,7 @@ use nix::sys::{
     timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags},
 };
 
-use crate::reactor::Reactor;
+use crate::reactor::{Reactor, WakeupKind};
 
 pub struct Timer {
     expiration: Instant,
@@ -39,7 +43,7 @@ impl Future for Timer {
             )
             .unwrap();
 
-        Reactor::get().register_waker(self.fd.clone(), cx.waker().clone());
+        Reactor::get().register_waker(self.fd.clone(), cx.waker().clone(), WakeupKind::Readable);
 
         Poll::Pending
     }
