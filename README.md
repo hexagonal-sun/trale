@@ -24,6 +24,7 @@ Supported Features
   reactor.
 - A timer using Linux's [`TimerFd`](https://linux.die.net/man/2/timerfd_create).
 - UDP sockets, using non-blocking `std::net::UdpSocket`.
+- TCP sockets.
 
 Example Usage
 -----
@@ -52,6 +53,15 @@ fn main() {
     assert_eq!(task2.join(), 2);
 }
 ```
+
+- `timer`: This example spawns two tasks which, both racing to print
+  messages to the terminal.
+- `udp`: This example transfers twenty bytes between two tasks usng
+  UDP sockets on the localhost interface whilst a third task is
+  printing messages to the terminal.
+- `tcp`: This is an implementation of a TCP echo server (connecting to
+  `127.0.0.1:5000`) whilst another task prints out messages to the
+  terminal.
 
 ## Implementation
 
