@@ -113,7 +113,6 @@ impl Executor {
                 run_q.pop().unwrap()
             };
 
-
             // It looks odd to put the task back on the waitqueue
             // before we call poll(). However this is needed to
             // prevent a race condition.  If `poll()` on the future

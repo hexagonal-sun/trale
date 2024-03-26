@@ -1,6 +1,9 @@
 use std::{net::Ipv4Addr, time::Duration};
 
-use trale::{futures::{timer::Timer, udp::UdpSocket}, task::Executor};
+use trale::{
+    futures::{timer::Timer, udp::UdpSocket},
+    task::Executor,
+};
 
 fn main() {
     let task1 = Executor::spawn(async {
@@ -24,7 +27,10 @@ fn main() {
         let mut buf = [0xadu8; 20];
         let udpsock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         Timer::sleep(Duration::from_secs(1)).await;
-        let len = udpsock.send_to(&mut buf, (Ipv4Addr::LOCALHOST, 9998)).await.unwrap();
+        let len = udpsock
+            .send_to(&mut buf, (Ipv4Addr::LOCALHOST, 9998))
+            .await
+            .unwrap();
 
         println!("Sent {} bytes", len);
     });
