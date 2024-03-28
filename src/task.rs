@@ -129,7 +129,11 @@ impl Executor {
     /// synchronous context.  This is the equivalent of calling:
     ///
     /// ```
+    /// # use trale::task::Executor;
+    /// # use std::future::Future;
+    /// # fn x<Fut: Future<Output = ()> + Send + 'static>(f: Fut) {
     /// Executor::spawn(f).join()
+    /// # }
     /// ```
     pub fn block_on<Fut, T>(f: Fut) -> T
     where
