@@ -6,5 +6,5 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.81"
 async-lock = "3.3.0"
-nix = { version = "0.28.0", features = ["event", "time", "socket", "net"] }
+nix = { version = "0.28.0", features = ["event", "time", "socket", "net", "fs"] }
 slab = "0.4.9"
