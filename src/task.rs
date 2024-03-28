@@ -6,16 +6,18 @@ use std::{
         mpsc::{sync_channel, Receiver},
         Arc, Condvar, Mutex,
     },
-    task::{Context, Poll, Wake, Waker},
+    task::{ready, Context, Poll, Wake, Waker},
     thread,
 };
 
 use async_lock::OnceCell;
 use slab::Slab;
 
+use crate::futures::event::Event;
+
 struct Task {
     id: AtomicUsize,
-    future: Mutex<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+    future: Mutex<Pin<Box<dyn Future<Output = ()> + Send>>>,
 }
 
 impl Wake for Task {
@@ -43,11 +45,24 @@ pub struct Executor {
 
 pub struct TaskJoiner<T> {
     rx: Receiver<T>,
+    finished: Event,
 }
 
 impl<T> TaskJoiner<T> {
     pub fn join(self) -> T {
         self.rx.recv().unwrap()
+    }
+}
+
+impl<T> Future for TaskJoiner<T> {
+    type Output = T;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let finished = Pin::new(&mut self.finished);
+
+        ready!(finished.poll(cx)).unwrap();
+
+        Poll::Ready(self.rx.recv().unwrap())
     }
 }
 
@@ -68,13 +83,16 @@ impl Executor {
 
     pub fn spawn<Fut, T>(f: Fut) -> TaskJoiner<T>
     where
-        Fut: Future<Output = T> + Sync + Send + 'static,
+        Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = sync_channel(1);
+        let evt = Event::new().unwrap();
+        let evt2 = evt.clone();
 
         let fut = async move {
             let value = f.await;
+            evt2.notify_one().unwrap();
             tx.send(value).unwrap();
         };
 
@@ -90,7 +108,7 @@ impl Executor {
 
         executor.cv.notify_all();
 
-        TaskJoiner { rx }
+        TaskJoiner { rx, finished: evt }
     }
 
     pub fn block_on<Fut, T>(f: Fut) -> T
