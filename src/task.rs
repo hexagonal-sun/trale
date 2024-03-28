@@ -37,18 +37,29 @@ impl Wake for Task {
     }
 }
 
+/// A type that is responsible for pushing futures through to
+/// completion. You can begin execution of a new task by calling the
+/// [Executor::spawn] function.
 pub struct Executor {
     waiting: Mutex<Slab<Arc<Task>>>,
     run_q: Mutex<Vec<Arc<Task>>>,
     cv: Condvar,
 }
 
+/// This type represents a handle to a running task.  You can call
+/// [TaskJoiner::join] from a synchronous context to block execution
+/// and yield the future's value.  If you want to wait for execution
+/// to finish from an asynchronous context, use `.await` on the
+/// joiner.  If the joiner is dropped then execution of the future
+/// continues to completion but the return value is lost.
 pub struct TaskJoiner<T> {
     rx: Receiver<T>,
     finished: Event,
 }
 
 impl<T> TaskJoiner<T> {
+    /// block execution and wait for a task to finish executing.  The
+    /// return value `T` is the value yielded by the task's future.
     pub fn join(self) -> T {
         self.rx.recv().unwrap()
     }
@@ -81,6 +92,9 @@ impl Executor {
         })
     }
 
+    /// Spawn a new future and begin executing it immediately.  A
+    /// [TaskJoiner] is returned which can be used to wait for
+    /// completion of the future `f` and obtain it's return value.
     pub fn spawn<Fut, T>(f: Fut) -> TaskJoiner<T>
     where
         Fut: Future<Output = T> + Send + 'static,
@@ -111,6 +125,12 @@ impl Executor {
         TaskJoiner { rx, finished: evt }
     }
 
+    /// A convenience function for waiting on a future from a
+    /// synchronous context.  This is the equivalent of calling:
+    ///
+    /// ```
+    /// Executor::spawn(f).join()
+    /// ```
     pub fn block_on<Fut, T>(f: Fut) -> T
     where
         Fut: Future<Output = T> + Sync + Send + 'static,
