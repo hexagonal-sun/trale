@@ -1,9 +1,9 @@
 `trale`: Tiny Rust Async Linux Executor
 =====
 
-This project is an implementation of a asynchronous Rust executor,
-written in in as few a lines as possible. It's main purpose it so act
-as a resource for people studying Rust's async implementation; by
+This project is an implementation of an asynchronous Rust executor,
+written in as few a lines as possible. Its main purpose it to act
+as a resource for people studying Rust's async implementation by
 implementing a *real* executor that can execute multiple async tasks
 on the same thread it showcases a simple, small concrete
 implementation. To achieve this, we tightly couple with Linux's
