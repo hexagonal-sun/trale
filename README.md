@@ -62,6 +62,9 @@ fn main() {
 - `tcp`: This is an implementation of a TCP echo server (connecting to
   `127.0.0.1:5000`) whilst another task prints out messages to the
   terminal.
+- `sub_tasks`: This demonstates how a subtask can be spawned from a 
+   parent task and the joinhandle can be `.await`ed on without blocking
+   the runqueue.
 
 ## Implementation
 
