@@ -2,10 +2,10 @@
 =====
 
 This project is an implementation of an asynchronous Rust executor,
-written in as few a lines as possible. Its main purpose it to act
+written in as few a lines as possible. Its main purpose is to act
 as a resource for people studying Rust's async implementation by
 implementing a *real* executor that can execute multiple async tasks
-on the same thread it showcases a simple, small concrete
+on the same thread. It showcases a simple, small concrete
 implementation. To achieve this, we tightly couple with Linux's
 `epoll` interface, facilitating abstraction omission and a high
 tolerance for low performance (liberal use of `clone()` and heap
@@ -25,6 +25,7 @@ Supported Features
 - A timer using Linux's [`TimerFd`](https://linux.die.net/man/2/timerfd_create).
 - UDP sockets, using non-blocking `std::net::UdpSocket`.
 - TCP sockets.
+- Inter-task events via [`EventFd`](https://linux.die.net/man/2/eventfd).
 
 Example Usage
 -----
