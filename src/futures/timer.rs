@@ -48,3 +48,68 @@ impl Future for Timer {
         Poll::Pending
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use crate::task::Executor;
+
+    use super::Timer;
+
+    #[test]
+    fn sleep_simple() {
+        let before = Instant::now();
+        Executor::block_on(async {
+            Timer::sleep(Duration::from_secs(1)).await;
+        });
+        assert!(Instant::now() - before > Duration::from_millis(900));
+    }
+
+    #[test]
+    fn sleep_multiple_tasks() {
+        let before = Instant::now();
+        let t1 = Executor::spawn(async {
+            Timer::sleep(Duration::from_secs(1)).await;
+        });
+        let t2 = Executor::spawn(async {
+            Timer::sleep(Duration::from_secs(1)).await;
+        });
+        let t3 = Executor::spawn(async {
+            Timer::sleep(Duration::from_secs(2)).await;
+        });
+
+        t1.join();
+        t2.join();
+        assert!(Instant::now() - before > Duration::from_millis(900));
+        assert!(Instant::now() - before < Duration::from_millis(1100));
+
+        t3.join();
+        assert!(Instant::now() - before > Duration::from_millis(1900));
+        assert!(Instant::now() - before < Duration::from_millis(2100));
+    }
+
+    #[test]
+    fn sleep_subtasks() {
+        let before = Instant::now();
+        Executor::block_on(async move {
+            Timer::sleep(Duration::from_secs(1)).await;
+            assert!(Instant::now() - before > Duration::from_millis(900));
+            assert!(Instant::now() - before < Duration::from_millis(1100));
+
+            let t1 = Executor::spawn(async {
+                Timer::sleep(Duration::from_secs(1)).await;
+            });
+            let t2 = Executor::spawn(async {
+                Timer::sleep(Duration::from_secs(1)).await;
+            });
+
+            t1.await;
+            t2.await;
+            assert!(Instant::now() - before > Duration::from_millis(1900));
+            assert!(Instant::now() - before < Duration::from_millis(2100));
+        });
+        assert!(Instant::now() - before > Duration::from_millis(1900));
+        assert!(Instant::now() - before < Duration::from_millis(2100));
+    }
+}
