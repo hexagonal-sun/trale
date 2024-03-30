@@ -137,7 +137,7 @@ impl Executor {
     /// ```
     pub fn block_on<Fut, T>(f: Fut) -> T
     where
-        Fut: Future<Output = T> + Sync + Send + 'static,
+        Fut: Future<Output = T> + Send + 'static,
         T: Send + 'static,
     {
         Self::spawn(f).join()
