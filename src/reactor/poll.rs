@@ -1,62 +1,106 @@
+use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags, EpollTimeout};
 use std::{
-    os::fd::AsFd,
+    collections::BTreeMap,
+    os::fd::{AsFd, AsRawFd},
     sync::{Arc, Mutex},
 };
 
-use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags, EpollTimeout};
-use slab::Slab;
-
 use super::WakeupKind;
+
+struct RwQueue<T: Send + Sync> {
+    readers: Vec<T>,
+    writers: Vec<T>,
+}
+
+impl<T: Send + Sync> RwQueue<T> {
+    fn insert(&mut self, rw: WakeupKind, obj: T) {
+        match rw {
+            WakeupKind::Readable => self.readers.push(obj),
+            WakeupKind::Writable => self.writers.push(obj),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.readers.is_empty() && self.writers.is_empty()
+    }
+
+    fn get(&mut self, flag: EpollFlags) -> Option<T> {
+        match flag {
+            EpollFlags::EPOLLIN => self.readers.pop(),
+            EpollFlags::EPOLLOUT => self.writers.pop(),
+            _ => self.readers.pop().or(self.writers.pop()),
+        }
+    }
+
+    fn new() -> Self {
+        Self {
+            readers: Vec::new(),
+            writers: Vec::new(),
+        }
+    }
+}
 
 pub struct Subscription<T: Send + Sync> {
     fd: Arc<dyn AsFd + Send + Sync>,
-    data: T,
+    queue: RwQueue<T>,
 }
 
 pub struct Poll<T: Send + Sync> {
-    wakers: Arc<Mutex<Slab<Subscription<T>>>>,
+    subscriptions: Arc<Mutex<BTreeMap<i32, Subscription<T>>>>,
     epoll: Epoll,
 }
 
 impl<T: Send + Sync> Poll<T> {
     pub fn new() -> Self {
         Self {
-            wakers: Arc::new(Mutex::new(Slab::new())),
+            subscriptions: Arc::new(Mutex::new(BTreeMap::new())),
             epoll: Epoll::new(EpollCreateFlags::empty()).unwrap(),
         }
     }
 
     pub fn insert(&self, fd: Arc<dyn AsFd + Send + Sync>, data: T, kind: WakeupKind) {
-        let mut slab = self.wakers.lock().unwrap();
-        let entry = slab.vacant_entry();
-        let sub = Subscription {
-            fd: fd.clone(),
-            data,
-        };
+        let mut subscriptions = self.subscriptions.lock().unwrap();
+        let idx = fd.as_fd().as_raw_fd();
+        if let Some(entry) = subscriptions.get_mut(&idx) {
+            entry.queue.insert(kind, data);
+        } else {
+            let mut sub = Subscription {
+                fd: fd.clone(),
+                queue: RwQueue::new(),
+            };
 
-        let flags = match kind {
-            WakeupKind::Readable => EpollFlags::EPOLLIN,
-            WakeupKind::Writable => EpollFlags::EPOLLOUT,
-        };
+            sub.queue.insert(kind, data);
 
-        let epoll_event = EpollEvent::new(flags, entry.key() as u64);
-        self.epoll.add(fd.as_fd(), epoll_event).unwrap();
+            let epoll_event =
+                EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, idx as u64);
+            self.epoll.add(fd.as_fd(), epoll_event).unwrap();
 
-        entry.insert(sub);
+            subscriptions.insert(idx, sub);
+        }
     }
 
     pub fn wait(&self) -> T {
-        let mut event = [EpollEvent::empty()];
-        let n = self.epoll.wait(&mut event, EpollTimeout::NONE).unwrap();
+        loop {
+            let mut event = [EpollEvent::empty()];
+            let n = self.epoll.wait(&mut event, EpollTimeout::NONE).unwrap();
+            dbg!(event);
 
-        assert_eq!(n, 1);
+            assert_eq!(n, 1);
 
-        {
-            let mut slab = self.wakers.lock().unwrap();
-            let subscription = slab.remove(event[0].data() as usize);
-            self.epoll.delete(subscription.fd.as_fd()).unwrap();
+            {
+                let idx = event[0].data() as i32;
+                let mut subscriptions = self.subscriptions.lock().unwrap();
 
-            subscription.data
+                if let Some(sub) = subscriptions.get_mut(&idx) {
+                    if let Some(ret) = sub.queue.get(event[0].events()) {
+                        if sub.queue.is_empty() {
+                            let sub = subscriptions.remove(&idx).unwrap();
+                            self.epoll.delete(sub.fd.as_fd()).unwrap();
+                        }
+                        return ret;
+                    }
+                }
+            }
         }
     }
 }
