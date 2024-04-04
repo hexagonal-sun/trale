@@ -26,6 +26,8 @@ Supported Features
 - UDP sockets, using non-blocking `std::net::UdpSocket`.
 - TCP sockets.
 - Inter-task events via [`EventFd`](https://linux.die.net/man/2/eventfd).
+- Task synchronisation via a `Mutex` type, using `EventFd` as the
+  synchronisation primitive.
 
 Example Usage
 -----
