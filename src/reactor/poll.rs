@@ -1,6 +1,6 @@
 use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags, EpollTimeout};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     os::fd::{AsFd, AsRawFd},
     sync::{Arc, Mutex},
 };
@@ -8,15 +8,15 @@ use std::{
 use super::WakeupKind;
 
 struct RwQueue<T: Send + Sync> {
-    readers: Vec<T>,
-    writers: Vec<T>,
+    readers: VecDeque<T>,
+    writers: VecDeque<T>,
 }
 
 impl<T: Send + Sync> RwQueue<T> {
     fn insert(&mut self, rw: WakeupKind, obj: T) {
         match rw {
-            WakeupKind::Readable => self.readers.push(obj),
-            WakeupKind::Writable => self.writers.push(obj),
+            WakeupKind::Readable => self.readers.push_back(obj),
+            WakeupKind::Writable => self.writers.push_back(obj),
         }
     }
 
@@ -26,16 +26,16 @@ impl<T: Send + Sync> RwQueue<T> {
 
     fn get(&mut self, flag: EpollFlags) -> Option<T> {
         match flag {
-            EpollFlags::EPOLLIN => self.readers.pop(),
-            EpollFlags::EPOLLOUT => self.writers.pop(),
-            _ => self.readers.pop().or(self.writers.pop()),
+            EpollFlags::EPOLLIN => self.readers.pop_front(),
+            EpollFlags::EPOLLOUT => self.writers.pop_front(),
+            _ => self.readers.pop_front().or(self.writers.pop_front()),
         }
     }
 
     fn new() -> Self {
         Self {
-            readers: Vec::new(),
-            writers: Vec::new(),
+            readers: VecDeque::new(),
+            writers: VecDeque::new(),
         }
     }
 }
