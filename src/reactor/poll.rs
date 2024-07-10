@@ -83,7 +83,6 @@ impl<T: Send + Sync> Poll<T> {
         loop {
             let mut event = [EpollEvent::empty()];
             let n = self.epoll.wait(&mut event, EpollTimeout::NONE).unwrap();
-            dbg!(event);
 
             assert_eq!(n, 1);
 
