@@ -28,8 +28,8 @@ use std::io::Result;
 use std::net::SocketAddr;
 use std::net::ToSocketAddrs;
 use std::net::UdpSocket as StdUdpSocket;
+use std::os::fd::AsRawFd;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::Context;
 use std::task::Poll;
 
@@ -38,7 +38,7 @@ use crate::reactor::WakeupKind;
 
 /// An async datagram socket.
 pub struct UdpSocket {
-    inner: Arc<StdUdpSocket>,
+    inner: StdUdpSocket,
 }
 
 impl UdpSocket {
@@ -51,7 +51,7 @@ impl UdpSocket {
         sock.set_nonblocking(true)?;
 
         Ok(Self {
-            inner: Arc::new(sock),
+            inner: sock,
         })
     }
 
@@ -71,7 +71,7 @@ impl UdpSocket {
     /// ```
     pub fn recv_from<'a>(&'a mut self, buf: &'a mut [u8]) -> RecvFrom {
         RecvFrom {
-            sock: self.inner.clone(),
+            sock: &self.inner,
             buf,
         }
     }
@@ -92,7 +92,7 @@ impl UdpSocket {
     /// ```
     pub fn send_to<'a, A: ToSocketAddrs>(&'a self, buf: &'a [u8], target: A) -> SendTo<A> {
         SendTo {
-            sock: self.inner.clone(),
+            sock: &self.inner,
             dst: target,
             buf,
         }
@@ -101,20 +101,20 @@ impl UdpSocket {
 
 /// A future that receives data into a datagram socket, see
 /// [UdpSocket::recv_from].
-pub struct RecvFrom<'a> {
-    sock: Arc<StdUdpSocket>,
-    buf: &'a mut [u8],
+pub struct RecvFrom<'a, 'b> {
+    sock: &'a StdUdpSocket,
+    buf: &'b mut [u8],
 }
 
-impl Future for RecvFrom<'_> {
+impl Future for RecvFrom<'_, '_> {
     type Output = Result<(usize, SocketAddr)>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.sock.clone().recv_from(self.buf) {
+        match self.sock.recv_from(self.buf) {
             Ok(ret) => Poll::Ready(Ok(ret)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 Reactor::get().register_waker(
-                    self.sock.clone(),
+                    self.sock.as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Readable,
                 );
@@ -128,21 +128,21 @@ impl Future for RecvFrom<'_> {
 
 /// A future that send data from a datagram socket, see
 /// [UdpSocket::send_to].
-pub struct SendTo<'a, A: ToSocketAddrs> {
-    sock: Arc<StdUdpSocket>,
+pub struct SendTo<'a, 'b, A: ToSocketAddrs> {
+    sock: &'a StdUdpSocket,
     dst: A,
-    buf: &'a [u8],
+    buf: &'b [u8],
 }
 
-impl<A: ToSocketAddrs> Future for SendTo<'_, A> {
+impl<A: ToSocketAddrs> Future for SendTo<'_, '_, A> {
     type Output = Result<usize>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match self.sock.clone().send_to(self.buf, &self.dst) {
+        match self.sock.send_to(self.buf, &self.dst) {
             Ok(ret) => Poll::Ready(Ok(ret)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
                 Reactor::get().register_waker(
-                    self.sock.clone(),
+                    self.sock.as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Writable,
                 );
