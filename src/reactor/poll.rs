@@ -1,7 +1,9 @@
-use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags, EpollTimeout};
+use libc::{epoll_event, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_DEL};
 use std::{
     collections::{BTreeMap, VecDeque},
-    os::fd::{AsFd, AsRawFd},
+    mem::MaybeUninit,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    ptr::null_mut,
     sync::{Arc, Mutex},
 };
 
@@ -24,11 +26,11 @@ impl<T: Send + Sync> RwQueue<T> {
         self.readers.is_empty() && self.writers.is_empty()
     }
 
-    fn get(&mut self, flag: EpollFlags) -> Option<T> {
-        match flag {
-            EpollFlags::EPOLLIN => self.readers.pop_front(),
-            EpollFlags::EPOLLOUT => self.writers.pop_front(),
-            _ => self.readers.pop_front().or(self.writers.pop_front()),
+    fn get(&mut self, flag: u32) -> Option<T> {
+        if flag & EPOLLIN as u32 != 0 {
+            self.readers.pop_front()
+        } else {
+            self.writers.pop_front()
         }
     }
 
@@ -41,60 +43,97 @@ impl<T: Send + Sync> RwQueue<T> {
 }
 
 pub struct Subscription<T: Send + Sync> {
-    fd: Arc<dyn AsFd + Send + Sync>,
+    fd: i32,
     queue: RwQueue<T>,
 }
 
 pub struct Poll<T: Send + Sync> {
     subscriptions: Arc<Mutex<BTreeMap<i32, Subscription<T>>>>,
-    epoll: Epoll,
+    epoll: OwnedFd,
 }
 
 impl<T: Send + Sync> Poll<T> {
-    pub fn new() -> Self {
-        Self {
-            subscriptions: Arc::new(Mutex::new(BTreeMap::new())),
-            epoll: Epoll::new(EpollCreateFlags::empty()).unwrap(),
+    pub fn new() -> std::io::Result<Self> {
+        let epoll = unsafe { libc::epoll_create1(0) };
+
+        if epoll == -1 {
+            return Err(std::io::Error::last_os_error());
         }
+
+        Ok(Self {
+            subscriptions: Arc::new(Mutex::new(BTreeMap::new())),
+            epoll: unsafe { OwnedFd::from_raw_fd(epoll) },
+        })
     }
 
-    pub fn insert(&self, fd: Arc<dyn AsFd + Send + Sync>, data: T, kind: WakeupKind) {
+    pub fn insert(&self, fd: RawFd, data: T, kind: WakeupKind) {
         let mut subscriptions = self.subscriptions.lock().unwrap();
-        let idx = fd.as_fd().as_raw_fd();
-        if let Some(entry) = subscriptions.get_mut(&idx) {
+        if let Some(entry) = subscriptions.get_mut(&fd) {
             entry.queue.insert(kind, data);
         } else {
             let mut sub = Subscription {
-                fd: fd.clone(),
+                fd,
                 queue: RwQueue::new(),
             };
 
             sub.queue.insert(kind, data);
 
-            let epoll_event =
-                EpollEvent::new(EpollFlags::EPOLLIN | EpollFlags::EPOLLOUT, idx as u64);
-            self.epoll.add(fd.as_fd(), epoll_event).unwrap();
+            let mut epoll_event = libc::epoll_event {
+                events: EPOLLIN as u32 | EPOLLOUT as u32,
+                u64: fd as u64,
+            };
 
-            subscriptions.insert(idx, sub);
+            let ret = unsafe {
+                libc::epoll_ctl(
+                    self.epoll.as_raw_fd(),
+                    EPOLL_CTL_ADD,
+                    fd,
+                    &mut epoll_event as *mut epoll_event,
+                )
+            };
+
+            if ret == -1 {
+                panic!(
+                    "Could not ad FD to epoll {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+
+            subscriptions.insert(fd, sub);
         }
     }
 
     pub fn wait(&self) -> T {
         loop {
-            let mut event = [EpollEvent::empty()];
-            let n = self.epoll.wait(&mut event, EpollTimeout::NONE).unwrap();
+            let event = unsafe {
+                let mut event: MaybeUninit<libc::epoll_event> = MaybeUninit::uninit();
+                let n = libc::epoll_wait(self.epoll.as_raw_fd(), event.as_mut_ptr(), 1, -1);
+                if n != 1 {
+                    panic!("epoll returned non-1 value");
+                }
 
-            assert_eq!(n, 1);
+                event.assume_init()
+            };
 
             {
-                let idx = event[0].data() as i32;
+                let idx = event.u64 as i32;
                 let mut subscriptions = self.subscriptions.lock().unwrap();
 
                 if let Some(sub) = subscriptions.get_mut(&idx) {
-                    if let Some(ret) = sub.queue.get(event[0].events()) {
+                    if let Some(ret) = sub.queue.get(event.events) {
                         if sub.queue.is_empty() {
                             let sub = subscriptions.remove(&idx).unwrap();
-                            self.epoll.delete(sub.fd.as_fd()).unwrap();
+                            let ret = unsafe {
+                                libc::epoll_ctl(
+                                    self.epoll.as_raw_fd(),
+                                    EPOLL_CTL_DEL,
+                                    sub.fd,
+                                    null_mut(),
+                                )
+                            };
+                            if ret == -1 {
+                                panic!("Could not remove fd from epoll");
+                            }
                         }
                         return ret;
                     }
@@ -106,7 +145,11 @@ impl<T: Send + Sync> Poll<T> {
 
 #[cfg(test)]
 mod tests {
-    use std::{os::fd::OwnedFd, sync::Arc, thread::sleep, time::Duration};
+    use std::{
+        os::fd::{AsRawFd, OwnedFd},
+        thread::sleep,
+        time::Duration,
+    };
 
     use nix::unistd::{pipe, write};
 
@@ -114,11 +157,11 @@ mod tests {
 
     use super::Poll;
 
-    fn setup_test() -> (Arc<OwnedFd>, Arc<OwnedFd>, Poll<u32>) {
+    fn setup_test() -> (OwnedFd, OwnedFd, Poll<u32>) {
         let (fd_rd, fd_wr) = pipe().unwrap();
-        let fd_rd = Arc::new(fd_rd);
-        let fd_wr = Arc::new(fd_wr);
-        let poll: Poll<u32> = Poll::new();
+        let fd_rd = fd_rd;
+        let fd_wr = fd_wr;
+        let poll: Poll<u32> = Poll::new().unwrap();
 
         (fd_rd, fd_wr, poll)
     }
@@ -127,7 +170,7 @@ mod tests {
     fn single_wakeup_read() {
         let (fd_rd, fd_wr, poll) = setup_test();
 
-        poll.insert(fd_rd.clone(), 1, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 1, WakeupKind::Readable);
 
         let t1 = std::thread::spawn(move || {
             assert_eq!(poll.wait(), 1);
@@ -144,7 +187,7 @@ mod tests {
     fn single_wakeup_write() {
         let (_fd_rd, fd_wr, poll) = setup_test();
 
-        poll.insert(fd_wr.clone(), 1, WakeupKind::Writable);
+        poll.insert(fd_wr.as_raw_fd(), 1, WakeupKind::Writable);
 
         let t1 = std::thread::spawn(move || {
             assert_eq!(poll.wait(), 1);
@@ -158,9 +201,9 @@ mod tests {
     fn multi_wakeup_same_fd_read() {
         let (fd_rd, fd_wr, poll) = setup_test();
 
-        poll.insert(fd_rd.clone(), 1, WakeupKind::Readable);
-        poll.insert(fd_rd.clone(), 2, WakeupKind::Readable);
-        poll.insert(fd_rd.clone(), 3, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 1, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 2, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 3, WakeupKind::Readable);
 
         let t1 = std::thread::spawn(move || {
             assert_eq!(poll.wait(), 1);
@@ -181,12 +224,12 @@ mod tests {
         let (fd_rd, fd_wr, poll) = setup_test();
         let (fd2_rd, fd2_wr, _) = setup_test();
 
-        poll.insert(fd_rd.clone(), 1, WakeupKind::Readable);
-        poll.insert(fd_rd.clone(), 2, WakeupKind::Readable);
-        poll.insert(fd_rd.clone(), 3, WakeupKind::Readable);
-        poll.insert(fd2_rd.clone(), 4, WakeupKind::Readable);
-        poll.insert(fd2_rd.clone(), 5, WakeupKind::Readable);
-        poll.insert(fd2_rd.clone(), 6, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 1, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 2, WakeupKind::Readable);
+        poll.insert(fd_rd.as_raw_fd(), 3, WakeupKind::Readable);
+        poll.insert(fd2_rd.as_raw_fd(), 4, WakeupKind::Readable);
+        poll.insert(fd2_rd.as_raw_fd(), 5, WakeupKind::Readable);
+        poll.insert(fd2_rd.as_raw_fd(), 6, WakeupKind::Readable);
 
         let t1 = std::thread::spawn(move || {
             assert_eq!(poll.wait(), 4);

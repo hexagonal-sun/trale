@@ -1,7 +1,7 @@
 use std::{
     future::Future,
+    os::fd::AsFd,
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
     time::{Duration, Instant},
 };
@@ -15,7 +15,7 @@ use crate::reactor::{Reactor, WakeupKind};
 
 pub struct Timer {
     expiration: Instant,
-    fd: Arc<TimerFd>,
+    fd: TimerFd,
 }
 
 impl Timer {
@@ -23,7 +23,7 @@ impl Timer {
     pub fn sleep(d: Duration) -> Self {
         Self {
             expiration: Instant::now() + d,
-            fd: Arc::new(TimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::empty()).unwrap()),
+            fd: TimerFd::new(ClockId::CLOCK_MONOTONIC, TimerFlags::empty()).unwrap(),
         }
     }
 }
@@ -43,7 +43,7 @@ impl Future for Timer {
             )
             .unwrap();
 
-        Reactor::get().register_waker(self.fd.clone(), cx.waker().clone(), WakeupKind::Readable);
+        Reactor::get().register_waker(self.fd.as_fd(), cx.waker().clone(), WakeupKind::Readable);
 
         Poll::Pending
     }

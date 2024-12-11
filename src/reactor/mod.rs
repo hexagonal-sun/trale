@@ -1,5 +1,5 @@
 use async_lock::OnceCell;
-use std::{os::fd::AsFd, sync::Arc, task::Waker, thread};
+use std::{os::fd::AsRawFd, task::Waker, thread};
 
 use self::poll::Poll;
 
@@ -21,12 +21,14 @@ impl Reactor {
         REACTOR.get_or_init_blocking(|| {
             thread::spawn(|| Self::reactor_loop());
 
-            Self { poll: Poll::new() }
+            Self {
+                poll: Poll::new().unwrap(),
+            }
         })
     }
 
-    pub fn register_waker(&self, fd: Arc<dyn AsFd + Send + Sync>, waker: Waker, kind: WakeupKind) {
-        self.poll.insert(fd, waker, kind);
+    pub fn register_waker(&self, fd: impl AsRawFd, waker: Waker, kind: WakeupKind) {
+        self.poll.insert(fd.as_raw_fd(), waker, kind);
     }
 
     fn reactor_loop() -> ! {

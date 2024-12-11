@@ -68,10 +68,10 @@ impl<T> TaskJoiner<T> {
 impl<T> Future for TaskJoiner<T> {
     type Output = T;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let finished = Pin::new(&mut self.finished);
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let mut waiter = self.finished.wait();
 
-        ready!(finished.poll(cx)).unwrap();
+        ready!(Pin::new(&mut waiter).poll(cx)).unwrap();
 
         Poll::Ready(self.rx.recv().unwrap())
     }
