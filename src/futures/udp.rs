@@ -153,3 +153,31 @@ impl<A: ToSocketAddrs> Future for SendTo<'_, A> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::UdpSocket;
+    use crate::task::Executor;
+    use std::net::Ipv4Addr;
+
+    #[test]
+    fn send_recv() {
+        Executor::block_on(async {
+            let dst = (Ipv4Addr::LOCALHOST, 8086);
+            let tx_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let mut rx_sock = UdpSocket::bind(dst).unwrap();
+
+            let task = Executor::spawn(async move {
+                let mut buf = [0; 4];
+                rx_sock.recv_from(&mut buf).await.unwrap();
+            });
+
+            tx_sock
+                .send_to(&0xdeadbeef_u32.to_le_bytes(), dst)
+                .await
+                .unwrap();
+
+            task.await;
+        });
+    }
+}
