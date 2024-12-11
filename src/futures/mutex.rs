@@ -30,7 +30,7 @@ impl<T> Mutex<T> {
 
     pub async fn lock(&self) -> LockGuard<T> {
         let evt = self.evt.clone();
-        evt.await.unwrap();
+        evt.wait().await.unwrap();
         LockGuard { mtx: &self }
     }
 }
@@ -128,7 +128,10 @@ mod tests {
         })
         .join();
 
-        assert_eq!(Arc::into_inner(v2).unwrap().obj.into_inner(), vec![0, 1, 2, 2, 2, 2]);
+        assert_eq!(
+            Arc::into_inner(v2).unwrap().obj.into_inner(),
+            vec![0, 1, 2, 2, 2, 2]
+        );
 
         Ok(())
     }
