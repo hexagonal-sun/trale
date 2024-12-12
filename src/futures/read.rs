@@ -1,9 +1,8 @@
 use std::{
     future::Future,
     io,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd},
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -15,21 +14,21 @@ pub trait AsyncRead {
     fn read(&mut self, buf: &mut [u8]) -> impl Future<Output = io::Result<usize>>;
 }
 
-pub struct AsyncReader<'a> {
-    pub(crate) fd: Arc<OwnedFd>,
+pub struct AsyncReader<'a, T: AsFd + Unpin> {
+    pub(crate) fd: T,
     pub(crate) buf: &'a mut [u8],
 }
 
-impl Future for AsyncReader<'_> {
+impl<T: AsFd + Unpin> Future for AsyncReader<'_, T> {
     type Output = io::Result<usize>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let mut this = self.as_mut();
-        match read(this.fd.as_raw_fd(), this.buf) {
+        match read(this.fd.as_fd().as_raw_fd(), this.buf) {
             Ok(len) => Poll::Ready(Ok(len)),
             Err(e) if e == Errno::EWOULDBLOCK => {
                 Reactor::get().register_waker(
-                    self.fd.clone(),
+                    self.fd.as_fd().as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Readable,
                 );

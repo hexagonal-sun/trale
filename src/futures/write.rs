@@ -1,9 +1,8 @@
 use std::{
     future::Future,
     io,
-    os::fd::{AsFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd},
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -15,12 +14,12 @@ pub trait AsyncWrite {
     fn write(&mut self, buf: &[u8]) -> impl Future<Output = io::Result<usize>>;
 }
 
-pub struct AsyncWriter<'a> {
-    pub(crate) fd: Arc<OwnedFd>,
+pub struct AsyncWriter<'a, T: AsFd + Unpin> {
+    pub(crate) fd: T,
     pub(crate) buf: &'a [u8],
 }
 
-impl Future for AsyncWriter<'_> {
+impl<T: AsFd + Unpin> Future for AsyncWriter<'_, T> {
     type Output = io::Result<usize>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -28,7 +27,7 @@ impl Future for AsyncWriter<'_> {
             Ok(len) => Poll::Ready(Ok(len)),
             Err(e) if e == Errno::EWOULDBLOCK || e == Errno::EAGAIN => {
                 Reactor::get().register_waker(
-                    self.fd.clone(),
+                    self.fd.as_fd().as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Writable,
                 );

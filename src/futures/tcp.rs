@@ -2,9 +2,8 @@ use std::{
     future::Future,
     io,
     net::ToSocketAddrs,
-    os::fd::{AsRawFd, OwnedFd},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -22,7 +21,7 @@ use super::{
 };
 
 pub struct TcpStream {
-    inner: Arc<OwnedFd>,
+    inner: OwnedFd,
 }
 
 impl TcpStream {
@@ -37,15 +36,15 @@ impl TcpStream {
                 AddressFamily::Inet6
             };
 
-            let sock = Arc::new(socket(
+            let sock = socket(
                 family,
                 SockType::Stream,
                 SockFlag::SOCK_NONBLOCK,
                 None,
-            )?);
+            )?;
 
             let connect = SockConnect {
-                fd: sock.clone(),
+                fd: sock.as_fd(),
                 addr: addr.into(),
             };
 
@@ -59,12 +58,12 @@ impl TcpStream {
     }
 }
 
-struct SockConnect {
-    fd: Arc<OwnedFd>,
+struct SockConnect<'fd> {
+    fd: BorrowedFd<'fd>,
     addr: SockaddrStorage,
 }
 
-impl Future for SockConnect {
+impl Future for SockConnect<'_> {
     type Output = io::Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -86,7 +85,7 @@ impl Future for SockConnect {
 impl AsyncRead for TcpStream {
     fn read(&mut self, buf: &mut [u8]) -> impl Future<Output = io::Result<usize>> {
         AsyncReader {
-            fd: self.inner.clone(),
+            fd: self.inner.as_fd(),
             buf,
         }
     }
@@ -95,7 +94,7 @@ impl AsyncRead for TcpStream {
 impl AsyncWrite for TcpStream {
     fn write(&mut self, buf: &[u8]) -> impl Future<Output = io::Result<usize>> {
         AsyncWriter {
-            fd: self.inner.clone(),
+            fd: self.inner.as_fd(),
             buf,
         }
     }
