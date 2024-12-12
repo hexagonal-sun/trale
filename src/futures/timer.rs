@@ -1,3 +1,28 @@
+//! Async timer related futures.
+//!
+//! This module uses the Linux kernel's
+//! [timerfd](https://man7.org/linux/man-pages/man2/timerfd_create.2.html)
+//! facility to implement asynchronous timers. The main use-case for this is to
+//! put a task to sleep for a specific period of time.
+//!
+//! # Example
+//! Let's put a task to sleep for 2 seconds.
+//! ```
+//! use trale::futures::timer::Timer;
+//! use trale::task::Executor;
+//! use std::time::{Duration, Instant};
+//!# Executor::block_on(
+//! async {
+//!     let now = Instant::now();
+//!
+//!     Timer::sleep(Duration::from_secs(1)).await;
+//!
+//!     assert!(now.elapsed() > Duration::from_secs(1));
+//!#     Ok::<(), std::io::Error>(())
+//! }
+//!# );
+//! ```
+
 use std::{
     future::Future,
     os::fd::AsFd,
@@ -13,6 +38,10 @@ use nix::sys::{
 
 use crate::reactor::{Reactor, WakeupKind};
 
+/// Asynchronous timer.
+///
+/// This structure is a future that will expire at some point in the future. It
+/// can be obtained via the [Timer::sleep] function.
 pub struct Timer {
     expiration: Instant,
     fd: TimerFd,
@@ -20,6 +49,13 @@ pub struct Timer {
 
 impl Timer {
     #[must_use]
+    /// Put the current task to sleep for the specified duration.
+    ///
+    /// This function returns a future, that when `.await`ed will suspend the
+    /// execution of the current task until the specified duration has elapsed.
+    /// At that point the runtime will queue the task for execution. Note that
+    /// it is guaranteed that the task will be suspended for *at least* the
+    /// specified duration; it could sleep for longer.
     pub fn sleep(d: Duration) -> Self {
         Self {
             expiration: Instant::now() + d,
