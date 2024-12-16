@@ -21,7 +21,7 @@
 //!         evt2.wait().await.unwrap();
 //!     });
 //!
-//!     Timer::sleep(Duration::from_secs(1)).await;
+//!     Timer::sleep(Duration::from_secs(1)).unwrap().await;
 //!
 //!     evt.notify_one()?;
 //!

@@ -75,7 +75,7 @@ mod tests {
             let t2 = Executor::spawn(async move {
                 v2.lock().await.push(2);
             });
-            Timer::sleep(Duration::from_millis(250)).await;
+            Timer::sleep(Duration::from_millis(250)).unwrap().await;
             lock.push(1);
 
             drop(lock);
@@ -113,10 +113,10 @@ mod tests {
             let v = vv.clone();
 
             let t5 = Executor::spawn(async move {
-                Timer::sleep(Duration::from_millis(500)).await;
+                Timer::sleep(Duration::from_millis(500)).unwrap().await;
                 v.lock().await.push(2);
             });
-            Timer::sleep(Duration::from_millis(500)).await;
+            Timer::sleep(Duration::from_millis(500)).unwrap().await;
             lock.push(1);
 
             drop(lock);

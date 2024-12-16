@@ -7,11 +7,11 @@ use trale::{
 
 fn main() {
     let task1 = Executor::spawn(async {
-        Timer::sleep(Duration::from_millis(500)).await;
+        Timer::sleep(Duration::from_millis(500)).unwrap().await;
         println!("Hello A!");
-        Timer::sleep(Duration::from_secs(1)).await;
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
         println!("Hello B!");
-        Timer::sleep(Duration::from_secs(1)).await;
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
         println!("Hello C!");
     });
 
@@ -26,7 +26,7 @@ fn main() {
     let task3 = Executor::spawn(async {
         let mut buf = [0xadu8; 20];
         let udpsock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        Timer::sleep(Duration::from_secs(1)).await;
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
         let len = udpsock
             .send_to(&mut buf, (Ipv4Addr::LOCALHOST, 9998))
             .await
