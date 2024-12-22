@@ -50,9 +50,7 @@ impl UdpSocket {
 
         sock.set_nonblocking(true)?;
 
-        Ok(Self {
-            inner: sock,
-        })
+        Ok(Self { inner: sock })
     }
 
     /// Wait for reception of a datagram.

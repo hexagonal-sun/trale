@@ -33,8 +33,8 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use libc::{CLOCK_MONOTONIC, TFD_NONBLOCK};
 use crate::reactor::{Reactor, WakeupKind};
+use libc::{CLOCK_MONOTONIC, TFD_NONBLOCK};
 
 /// Asynchronous timer.
 ///
@@ -56,7 +56,6 @@ impl Timer {
         tspec
     }
 
-    #[must_use]
     /// Put the current task to sleep for the specified duration.
     ///
     /// This function returns a future, that when `.await`ed will suspend the
@@ -64,6 +63,7 @@ impl Timer {
     /// At that point the runtime will queue the task for execution. Note that
     /// it is guaranteed that the task will be suspended for *at least* the
     /// specified duration; it could sleep for longer.
+    #[must_use]
     pub fn sleep(d: Duration) -> Result<Self> {
         let expiration = SystemTime::now() + d;
         let timer = unsafe { libc::timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK) };
