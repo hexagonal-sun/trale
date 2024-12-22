@@ -1,17 +1,14 @@
 use std::{
     future::Future,
     io,
-    net::ToSocketAddrs,
-    os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd},
+    net::{SocketAddr, ToSocketAddrs},
+    os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
     pin::Pin,
     task::{Context, Poll},
 };
 
 use anyhow::{anyhow, Result};
-use nix::{
-    errno::Errno,
-    sys::socket::{connect, socket, AddressFamily, SockFlag, SockType, SockaddrStorage},
-};
+use libc::{AF_INET, AF_INET6, EALREADY, EINPROGRESS, SOCK_NONBLOCK, SOCK_STREAM};
 
 use crate::reactor::{Reactor, WakeupKind};
 
@@ -30,22 +27,19 @@ impl TcpStream {
         let mut last_err: anyhow::Error = anyhow!("Could not get socket addr");
 
         for addr in addrs {
-            let family = if addr.is_ipv4() {
-                AddressFamily::Inet
-            } else {
-                AddressFamily::Inet6
-            };
+            let family = if addr.is_ipv4() { AF_INET } else { AF_INET6 };
 
-            let sock = socket(
-                family,
-                SockType::Stream,
-                SockFlag::SOCK_NONBLOCK,
-                None,
-            )?;
+            let sock = unsafe { libc::socket(family, SOCK_STREAM | SOCK_NONBLOCK, 0) };
+
+            if sock == -1 {
+                Err(std::io::Error::last_os_error())?;
+            }
+
+            let sock = unsafe { OwnedFd::from_raw_fd(sock) };
 
             let connect = SockConnect {
                 fd: sock.as_fd(),
-                addr: addr.into(),
+                addr,
             };
 
             match connect.await {
@@ -60,24 +54,56 @@ impl TcpStream {
 
 struct SockConnect<'fd> {
     fd: BorrowedFd<'fd>,
-    addr: SockaddrStorage,
+    addr: SocketAddr,
+}
+
+union CSockAddr {
+    v4: libc::sockaddr_in,
+    v6: libc::sockaddr_in6,
 }
 
 impl Future for SockConnect<'_> {
     type Output = io::Result<()>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        match connect(self.fd.as_raw_fd(), &self.addr) {
-            Ok(()) => Poll::Ready(Ok(())),
-            Err(Errno::EINPROGRESS) => {
+        let (addr, len) = match self.addr {
+            SocketAddr::V4(addr) => {
+                let mut sin_addr: CSockAddr = unsafe { std::mem::zeroed() };
+                sin_addr.v4.sin_family = AF_INET as u16;
+                sin_addr.v4.sin_addr.s_addr = libc::htonl(addr.ip().to_bits());
+                sin_addr.v4.sin_port = libc::htons(addr.port());
+
+                (sin_addr, std::mem::size_of::<libc::sockaddr_in>())
+            }
+            SocketAddr::V6(addr) => {
+                let mut sin_addr: CSockAddr = unsafe { std::mem::zeroed() };
+                sin_addr.v6.sin6_family = AF_INET as u16;
+                sin_addr.v6.sin6_addr.s6_addr = addr.ip().octets();
+                sin_addr.v6.sin6_port = libc::htons(addr.port());
+
+                (sin_addr, std::mem::size_of::<libc::sockaddr_in6>())
+            }
+        };
+
+        let ret =
+            unsafe { libc::connect(self.fd.as_raw_fd(), &addr as *const _ as *const _, len as _) };
+
+        if ret == 0 {
+            return Poll::Ready(Ok(()));
+        }
+
+        let err = std::io::Error::last_os_error();
+
+        match err.raw_os_error().unwrap() {
+            EINPROGRESS | EALREADY => {
                 Reactor::get().register_waker(
-                    self.fd.clone(),
+                    self.fd.as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Writable,
                 );
                 Poll::Pending
             }
-            Err(e) => Poll::Ready(Err(e.into())),
+            _ => Poll::Ready(Err(err)),
         }
     }
 }
