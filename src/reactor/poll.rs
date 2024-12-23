@@ -146,21 +146,41 @@ impl<T: Send + Sync> Poll<T> {
 #[cfg(test)]
 mod tests {
     use std::{
-        os::fd::{AsRawFd, OwnedFd},
+        os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
         thread::sleep,
         time::Duration,
     };
 
-    use nix::unistd::{pipe, write};
+    use libc::O_NONBLOCK;
 
     use crate::reactor::WakeupKind;
 
     use super::Poll;
 
+    fn write(fd: impl AsFd, buf: &[u8]) {
+        let ret = unsafe {
+            libc::write(
+                fd.as_fd().as_raw_fd(),
+                buf.as_ptr() as *const _,
+                buf.len() as _,
+            )
+        };
+
+        if ret == -1 {
+            panic!("write failed");
+        }
+    }
+
     fn setup_test() -> (OwnedFd, OwnedFd, Poll<u32>) {
-        let (fd_rd, fd_wr) = pipe().unwrap();
-        let fd_rd = fd_rd;
-        let fd_wr = fd_wr;
+        let mut fds = [0, 0];
+        let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), O_NONBLOCK) };
+
+        if ret == -1 {
+            panic!("Pipe failed");
+        }
+
+        let fd_rd = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let fd_wr = unsafe { OwnedFd::from_raw_fd(fds[1]) };
         let poll: Poll<u32> = Poll::new().unwrap();
 
         (fd_rd, fd_wr, poll)
@@ -174,11 +194,10 @@ mod tests {
 
         let t1 = std::thread::spawn(move || {
             assert_eq!(poll.wait(), 1);
-
             assert!(poll.subscriptions.lock().unwrap().len() == 0);
         });
 
-        write(fd_wr, &[2]).unwrap();
+        write(fd_wr, &[2]);
 
         t1.join().unwrap();
     }
@@ -191,7 +210,6 @@ mod tests {
 
         let t1 = std::thread::spawn(move || {
             assert_eq!(poll.wait(), 1);
-            write(fd_wr, &[2]).unwrap();
         });
 
         t1.join().unwrap();
@@ -214,7 +232,7 @@ mod tests {
             assert!(poll.subscriptions.lock().unwrap().len() == 0);
         });
 
-        write(fd_wr, &[2]).unwrap();
+        write(fd_wr, &[2]);
 
         t1.join().unwrap();
     }
@@ -246,11 +264,11 @@ mod tests {
             assert!(poll.subscriptions.lock().unwrap().len() == 0);
         });
 
-        write(fd2_wr, &[2]).unwrap();
+        write(fd2_wr, &[2]);
 
         sleep(Duration::from_secs(1));
 
-        write(fd_wr, &[2]).unwrap();
+        write(fd_wr, &[2]);
 
         t1.join().unwrap();
     }

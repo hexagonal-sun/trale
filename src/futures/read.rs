@@ -6,7 +6,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use nix::{errno::Errno, unistd::read};
+use libc::EWOULDBLOCK;
 
 use crate::reactor::{Reactor, WakeupKind};
 
@@ -23,18 +23,30 @@ impl<T: AsFd + Unpin> Future for AsyncReader<'_, T> {
     type Output = io::Result<usize>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut this = self.as_mut();
-        match read(this.fd.as_fd().as_raw_fd(), this.buf) {
-            Ok(len) => Poll::Ready(Ok(len)),
-            Err(e) if e == Errno::EWOULDBLOCK => {
+        let res = unsafe {
+            libc::read(
+                self.fd.as_fd().as_raw_fd(),
+                self.buf.as_mut_ptr() as *mut _,
+                self.buf.len() as _,
+            )
+        };
+
+        if res != -1 {
+            return Poll::Ready(Ok(res as usize));
+        }
+
+        let err = std::io::Error::last_os_error();
+
+        match err.raw_os_error().unwrap() {
+            EWOULDBLOCK => {
                 Reactor::get().register_waker(
                     self.fd.as_fd().as_raw_fd(),
                     cx.waker().clone(),
-                    WakeupKind::Readable,
+                    WakeupKind::Writable,
                 );
                 Poll::Pending
             }
-            Err(e) => Poll::Ready(Err(e.into())),
+            _ => Poll::Ready(Err(err)),
         }
     }
 }
