@@ -9,6 +9,7 @@ pub struct Reactor {
     poll: Poll<Waker>,
 }
 
+#[derive(Debug)]
 pub enum WakeupKind {
     Readable,
     Writable,

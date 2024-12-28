@@ -1,10 +1,7 @@
 use libc::{epoll_event, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_DEL};
+use log::debug;
 use std::{
-    collections::{BTreeMap, VecDeque},
-    mem::MaybeUninit,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
-    ptr::null_mut,
-    sync::{Arc, Mutex},
+    collections::{BTreeMap, VecDeque}, mem::MaybeUninit, os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd}, ptr::null_mut, sync::{Arc, Mutex}
 };
 
 use super::WakeupKind;
@@ -47,6 +44,25 @@ pub struct Subscription<T: Send + Sync> {
     queue: RwQueue<T>,
 }
 
+impl<T: Send + Sync> From<&Subscription<T>> for libc::epoll_event {
+    fn from(value: &Subscription<T>) -> Self {
+        let mut events = 0;
+
+        if !value.queue.readers.is_empty() {
+            events |= EPOLLIN;
+        }
+
+        if !value.queue.writers.is_empty() {
+            events |= EPOLLOUT;
+        }
+
+        libc::epoll_event {
+            events: events as u32,
+            u64: value.fd as u64,
+        }
+    }
+}
+
 pub struct Poll<T: Send + Sync> {
     subscriptions: Arc<Mutex<BTreeMap<i32, Subscription<T>>>>,
     epoll: OwnedFd,
@@ -67,6 +83,7 @@ impl<T: Send + Sync> Poll<T> {
     }
 
     pub fn insert(&self, fd: RawFd, data: T, kind: WakeupKind) {
+        debug!("Inserting FD {fd:} for waking up kind: {kind:?}");
         let mut subscriptions = self.subscriptions.lock().unwrap();
         if let Some(entry) = subscriptions.get_mut(&fd) {
             entry.queue.insert(kind, data);
@@ -78,10 +95,7 @@ impl<T: Send + Sync> Poll<T> {
 
             sub.queue.insert(kind, data);
 
-            let mut epoll_event = libc::epoll_event {
-                events: EPOLLIN as u32 | EPOLLOUT as u32,
-                u64: fd as u64,
-            };
+            let mut epoll_event: libc::epoll_event = (&sub).into();
 
             let ret = unsafe {
                 libc::epoll_ctl(
@@ -107,6 +121,7 @@ impl<T: Send + Sync> Poll<T> {
         loop {
             let event = unsafe {
                 let mut event: MaybeUninit<libc::epoll_event> = MaybeUninit::uninit();
+                debug!("Calling epoll_wait");
                 let n = libc::epoll_wait(self.epoll.as_raw_fd(), event.as_mut_ptr(), 1, -1);
                 if n != 1 {
                     panic!("epoll returned non-1 value");
@@ -115,7 +130,9 @@ impl<T: Send + Sync> Poll<T> {
                 event.assume_init()
             };
 
+
             {
+                debug!("Epoll returned");
                 let idx = event.u64 as i32;
                 let mut subscriptions = self.subscriptions.lock().unwrap();
 
@@ -135,6 +152,7 @@ impl<T: Send + Sync> Poll<T> {
                                 panic!("Could not remove fd from epoll");
                             }
                         }
+                        debug!("Returning event");
                         return ret;
                     }
                 }
