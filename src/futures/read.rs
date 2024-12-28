@@ -42,7 +42,7 @@ impl<T: AsFd + Unpin> Future for AsyncReader<'_, T> {
                 Reactor::get().register_waker(
                     self.fd.as_fd().as_raw_fd(),
                     cx.waker().clone(),
-                    WakeupKind::Writable,
+                    WakeupKind::Readable,
                 );
                 Poll::Pending
             }
