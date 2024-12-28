@@ -1,7 +1,11 @@
 use libc::{epoll_event, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_DEL};
 use log::debug;
 use std::{
-    collections::{BTreeMap, VecDeque}, mem::MaybeUninit, os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd}, ptr::null_mut, sync::{Arc, Mutex}
+    collections::{BTreeMap, VecDeque},
+    mem::MaybeUninit,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
+    ptr::null_mut,
+    sync::{Arc, Mutex},
 };
 
 use super::WakeupKind;
@@ -129,7 +133,6 @@ impl<T: Send + Sync> Poll<T> {
 
                 event.assume_init()
             };
-
 
             {
                 debug!("Epoll returned");
