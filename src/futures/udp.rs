@@ -111,7 +111,7 @@ impl Future for RecvFrom<'_, '_> {
         match self.sock.recv_from(self.buf) {
             Ok(ret) => Poll::Ready(Ok(ret)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Reactor::get().register_waker(
+                Reactor::register_waker(
                     self.sock.as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Readable,
@@ -139,7 +139,7 @@ impl<A: ToSocketAddrs> Future for SendTo<'_, '_, A> {
         match self.sock.send_to(self.buf, &self.dst) {
             Ok(ret) => Poll::Ready(Ok(ret)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                Reactor::get().register_waker(
+                Reactor::register_waker(
                     self.sock.as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Writable,

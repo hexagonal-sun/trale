@@ -67,7 +67,7 @@ mod tests {
         let v = Arc::new(Mutex::new(vec![0u8])?);
         let v2 = v.clone();
 
-        Executor::spawn(async move {
+        Executor::block_on(async move {
             let mut lock = v.lock().await;
 
             let v2 = v.clone();
@@ -81,8 +81,7 @@ mod tests {
             drop(lock);
 
             t2.await;
-        })
-        .join();
+        });
 
         assert_eq!(Arc::into_inner(v2).unwrap().obj.into_inner(), vec![0, 1, 2]);
 
@@ -93,7 +92,7 @@ mod tests {
     fn multiple_locks() -> Result<()> {
         let vv = Arc::new(Mutex::new(vec![0u8])?);
         let v2 = vv.clone();
-        Executor::spawn(async move {
+        Executor::block_on(async move {
             let mut lock = vv.lock().await;
             let v = vv.clone();
 
@@ -125,8 +124,7 @@ mod tests {
             t3.await;
             t5.await;
             t4.await;
-        })
-        .join();
+        });
 
         assert_eq!(
             Arc::into_inner(v2).unwrap().obj.into_inner(),

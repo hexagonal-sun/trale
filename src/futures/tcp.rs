@@ -137,7 +137,7 @@ impl Future for Acceptor<'_> {
 
         match err.raw_os_error().unwrap() {
             libc::EWOULDBLOCK => {
-                Reactor::get().register_waker(
+                Reactor::register_waker(
                     self.inner.as_fd(),
                     cx.waker().clone(),
                     WakeupKind::Readable,
@@ -256,7 +256,7 @@ impl Future for SockConnect<'_> {
 
         match err.raw_os_error().unwrap() {
             EINPROGRESS | EALREADY => {
-                Reactor::get().register_waker(
+                Reactor::register_waker(
                     self.fd.as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Writable,

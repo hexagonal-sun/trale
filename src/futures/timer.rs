@@ -97,7 +97,7 @@ impl Future for Timer {
             panic!("timerfd_settime returned error");
         }
 
-        Reactor::get().register_waker(self.fd.as_fd(), cx.waker().clone(), WakeupKind::Readable);
+        Reactor::register_waker(self.fd.as_fd(), cx.waker().clone(), WakeupKind::Readable);
 
         Poll::Pending
     }
@@ -122,25 +122,27 @@ mod tests {
 
     #[test]
     fn sleep_multiple_tasks() {
-        let before = Instant::now();
-        let t1 = Executor::spawn(async {
-            Timer::sleep(Duration::from_secs(1)).unwrap().await;
-        });
-        let t2 = Executor::spawn(async {
-            Timer::sleep(Duration::from_secs(1)).unwrap().await;
-        });
-        let t3 = Executor::spawn(async {
-            Timer::sleep(Duration::from_secs(2)).unwrap().await;
-        });
+        Executor::block_on(async {
+            let before = Instant::now();
+            let t1 = Executor::spawn(async {
+                Timer::sleep(Duration::from_secs(1)).unwrap().await;
+            });
+            let t2 = Executor::spawn(async {
+                Timer::sleep(Duration::from_secs(1)).unwrap().await;
+            });
+            let t3 = Executor::spawn(async {
+                Timer::sleep(Duration::from_secs(2)).unwrap().await;
+            });
 
-        t1.join();
-        t2.join();
-        assert!(Instant::now() - before > Duration::from_millis(900));
-        assert!(Instant::now() - before < Duration::from_millis(1100));
+            t1.await;
+            t2.await;
+            assert!(Instant::now() - before > Duration::from_millis(900));
+            assert!(Instant::now() - before < Duration::from_millis(1100));
 
-        t3.join();
-        assert!(Instant::now() - before > Duration::from_millis(1900));
-        assert!(Instant::now() - before < Duration::from_millis(2100));
+            t3.await;
+            assert!(Instant::now() - before > Duration::from_millis(1900));
+            assert!(Instant::now() - before < Duration::from_millis(2100));
+        });
     }
 
     #[test]

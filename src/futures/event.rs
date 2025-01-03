@@ -193,7 +193,7 @@ impl Future for EventWaiter<'_> {
                 Poll::Ready(Ok(()))
             }
             Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                Reactor::get().register_waker(
+                Reactor::register_waker(
                     self.inner.as_raw_fd(),
                     ctx.waker().clone(),
                     WakeupKind::Readable,

@@ -39,7 +39,7 @@ impl<T: AsFd + Unpin> Future for AsyncReader<'_, T> {
 
         match err.raw_os_error().unwrap() {
             EWOULDBLOCK => {
-                Reactor::get().register_waker(
+                Reactor::register_waker(
                     self.fd.as_fd().as_raw_fd(),
                     cx.waker().clone(),
                     WakeupKind::Readable,
