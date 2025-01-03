@@ -1,33 +1,28 @@
-`trale`: Tiny Rust Async Linux Executor
-=====
+# `trale`: Tiny Rust Async Linux Executor
 
-This project is an implementation of an asynchronous Rust executor,
-written in as few a lines as possible. Its main purpose is to act
-as a resource for people studying Rust's async implementation by
-implementing a *real* executor that can execute multiple async tasks
-on the same thread. It showcases a simple, small concrete
-implementation. To achieve this, we tightly couple with Linux's
-`epoll` interface, facilitating abstraction omission and a high
-tolerance for low performance (liberal use of `clone()` and heap
-allocation).  However *correctness* isn't sacrificed.
+This project implements a minimalistic asynchronous Rust executor, written in as
+few lines as possible. Its primary goal is to serve as an educational resource
+for those studying Rust's async ecosystem. It provides a *real* executor capable
+of running multiple async tasks on a single thread, showcasing a simple yet
+functional concrete implementation.
 
-*NOTE*: This project should not be used in production.  It's main
-purpose is to be a learning aid.
+To achieve this, `trale` tightly integrates with Linux's `epoll` interface,
+opting for minimal abstractions to prioritize performance. While it sacrifices
+some abstraction in favor of efficiency, **correctness** is not compromised.
 
-Supported Features
------
+## Supported Features
 
-- An [`epoll`](https://linux.die.net/man/7/epoll) based reactor which
-  handles waking up tasks when an event has fired.
-- A simple single-threaded executor that polls tasks on a runqueue and
-  stores them on a idle-queue when waiting for a wakeup from the
-  reactor.
-- A timer using Linux's [`TimerFd`](https://linux.die.net/man/2/timerfd_create).
-- UDP sockets, using non-blocking `std::net::UdpSocket`.
-- TCP sockets.
-- Inter-task events via [`EventFd`](https://linux.die.net/man/2/eventfd).
-- Task synchronisation via a `Mutex` type, using `EventFd` as the
-  synchronisation primitive.
+- **`epoll`-based reactor**: Handles task wake-ups when events are fired.
+- **Single-threaded executor**: Polls tasks on a runqueue and moves them to an
+  idle queue when waiting for wakeups from the reactor.
+- **Timer using `TimerFd`**: Leverages Linux's
+  [`timerfd_create`](https://linux.die.net/man/2/timerfd_create).
+- **UDP sockets**: Non-blocking `std::net::UdpSocket` support.
+- **TCP sockets**: Basic TCP socket support.
+- **Inter-task events**: Uses [`EventFd`](https://linux.die.net/man/2/eventfd)
+  for inter-task communication.
+- **Task synchronization**: Implements synchronization via a `Mutex` type,
+  backed by `EventFd` as the primitive.
 
 Example Usage
 -----
@@ -37,24 +32,33 @@ the project.  As a starting point:
 
 ```rust
 use std::time::Duration;
-use trale::{task::Executor, timer::Timer};
+
+use trale::{futures::timer::Timer, task::Executor};
 
 fn main() {
-    let task1 = Executor::spawn(async {
-        Timer::sleep(Duration::from_secs(2)).await;
-        println!("Hello task 1!");
-        1
+    env_logger::init();
+
+    Executor::spawn(async {
+        Timer::sleep(Duration::from_secs(2)).unwrap().await;
+        println!("Hello A!");
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
+        println!("Hello B!");
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
+        println!("Hello C!");
     });
 
-    let task2 = Executor::spawn(async {
-        Timer::sleep(Duration::from_secs(2)).await;
-        println!("Hello task 2!");
-        2
+    Executor::spawn(async {
+        Timer::sleep(Duration::from_secs(2)).unwrap().await;
+        println!("Hello a!");
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
+        println!("Hello b!");
+        Timer::sleep(Duration::from_secs(1)).unwrap().await;
+        println!("Hello c!");
     });
 
-    assert_eq!(task1.join(), 1);
-    assert_eq!(task2.join(), 2);
+    Executor::run();
 }
+
 ```
 
 - `timer`: This example spawns two tasks which, both racing to print
@@ -62,9 +66,12 @@ fn main() {
 - `udp`: This example transfers twenty bytes between two tasks usng
   UDP sockets on the localhost interface whilst a third task is
   printing messages to the terminal.
-- `tcp`: This is an implementation of a TCP echo server (connecting to
+- `tcp`: This is an implementation of a TCP echo client (connecting to
   `127.0.0.1:5000`) whilst another task prints out messages to the
   terminal.
+- `tcp_serv`: This is an implementation of a TCP echo server (waiting for
+  connections to `127.0.0.1:5000`) whilst another task prints out messages to
+  the terminal.
 - `sub_tasks`: This demonstates how a subtask can be spawned from a 
    parent task and the joinhandle can be `.await`ed on without blocking
    the runqueue.
@@ -73,58 +80,60 @@ fn main() {
 
 ### Tasks & Executor
 
-Each `Task` represents a new asynchronous computation that we need to
-execute.  It consists of a top-level pinned-boxed future, called
-`future`, which is typically an `async` block, passed to the `spawn()`
-function.  This function constructs a `Task` object and places it on
-the executors run-queue.  It is the job of the `Executor` to call
-`poll()` on this top-level task's future to push along execution.
-Recall that futures are state-machines, therefore as we call `poll()`
-on the top-level future we are modifying state on the heap.  If the
-`poll()` function returns `Poll::Pending`, this state allows us to
-'resume' execution from the same point the next time `poll()` is
-called.  This is also the case for any sub-futures which are
-`.await`ed: `poll()` is called on any sub-futures which call `poll()`
-on their sub-futures and so forth until we hit a 'terminal' future.
-This future will most likely call into the reactor to schedule a
-wakeup once execution can progress.
+Each `Task` represents an asynchronous computation that needs to be executed. It
+contains a top-level pinned-boxed future, called `future`, which is typically an
+`async` block passed to the `spawn()` function. This function constructs a
+`Task` object and places it on the executor's per-thread run-queue.
 
-The `Executor` object, as mentioned above, is responsible for pushing
-tasks to their completion.  It consists of: a run-queue, a wait-queue
-and a thread from which the top-level future's `poll()` function is
-called.  The only way to get a reference to the executor is by calling
-the `Executor::get()` function, ensuring that only a single instance
-of the executor is created by using a `OnceCell`.  When this function
-is called for the first time a new thread is spawned which calls
-`executor_loop()`.  This loop removes any tasks from the run-queue (or
-waits if the run-queue is empty), places the task on the wait-queue
-(preempting the fact that the task will return `Poll::Pending`) and
-then calls `poll()` on it.  If `poll()` returns `Poll::Ready`, the
-task is removed from the wait-queue and is forgotten about, if the
-task returns `Poll::Pending` we continue to pick off the next task
-from the run-queue.
+It is the responsibility of the `Executor` to call `poll()` on this top-level
+task’s future to advance its execution. Since futures are state machines, each
+call to `poll()` modifies the future’s internal state on the heap. If `poll()`
+returns `Poll::Pending`, this allows the future to 'resume' execution at the
+same point when `poll()` is called again. This same process applies to any
+sub-futures that are `.await`ed: `poll()` is called on any sub-futures, which
+may in turn call `poll()` on their sub-futures, continuing until a 'terminal'
+future is reached. Typically, this terminal future will interact with the
+reactor to schedule a wakeup when execution can proceed.
 
-Whenever a task is ready to be `poll()`ed again (determined by the
-reactor) the `Task::wake` function is called.  This removes the task
-from the wait-queue, re-queues it back onto the run-queue and notifies
-the executor thread in case it was sleeping waiting for a new task to
-be added to the run-queue.
+The `Executor` is responsible for pushing tasks to completion. It consists of a
+run-queue, a wait-queue, and a thread that executes the `poll()` function for
+the top-level futures. The only way to access the executor is via the
+`Executor::get()` function, which ensures that only a single instance of the
+executor is created, using a `OnceCell`.
+
+When `Executor::get()` is called for the first time, a new thread is spawned to
+execute `executor_loop()`. This loop performs the following:
+
+1. It removes tasks from the run-queue (or waits if the run-queue is empty).
+2. It places each task on the wait-queue, assuming it will return
+   `Poll::Pending` on the first call to `poll()`.
+3. It calls `poll()` on the task.
+   - If `poll()` returns `Poll::Ready`, the task is removed from the wait-queue
+     and discarded.
+   - If `poll()` returns `Poll::Pending`, the task remains in the wait-queue,
+     and the loop continues by picking the next task from the run-queue.
+
+Whenever a task is ready to be polled again (as determined by the reactor), the
+`Task::wake()` function is called. This removes the task from the wait-queue,
+re-queues it onto the run-queue, and notifies the executor thread if it was
+waiting for new tasks to be added to the run-queue.
 
 ### Reactor
 
-The Reactor is responsible for calling `Task::wake` whenever a task is
-able to make progress.  Typically this is when a file-descriptor (FD)
-changes state and is able to be read/written to.  It is the job of the
-reactor to associate a task's waker and FD, detect changes on the FD
-and call the corresponding waker.  Terminal futures can register with
-the reactor via the `register_waker()` function.  This takes an FD,
-waker, and whether to monitor for read or write activity on the FD.
-Once a future has registered with the reactor they will then return
-`Poll::Pending` to put the task back onto the wait-queue (see the
-`Timer` future for an example).
+The Reactor is responsible for invoking `Task::wake()` whenever a task can make
+progress. This typically happens when a file descriptor (FD) changes state and
+becomes readable or writable. The reactor’s job is to associate a task's waker
+with an FD, detect changes on the FD, and trigger the corresponding waker.
 
-The reactor also consists of a thread which calls `reactor_loop()`,
-repeatedly calling `epoll_wait()`. This function returns when any of
-the monitored FDs change state and allows us to map these events back
-to a waker.  This thread will then call the `wake()` function for the
-associated task, resulting in it being placed back onto the run-queue.
+Terminal futures can register with the reactor via the `register_waker()`
+function. This function takes an FD, a waker, and a flag indicating whether to
+monitor the FD for read or write activity. Once a future registers with the
+reactor, it will return `Poll::Pending` in order to put the task back onto the
+wait-queue (for example, see the `Timer` future).
+
+The reactor consists of a separate thread that runs `reactor_loop()`. This loop
+calls `epoll_wait()` repeatedly, which blocks until one or more of the monitored
+FDs change state. Once an event is detected, the reactor maps the event back to
+the associated waker and calls `wake()` on it, which results in the task being
+placed back onto the run-queue.
+
