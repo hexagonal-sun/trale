@@ -1,3 +1,12 @@
+//! Asynchronous writes.
+//!
+//! The `write` module provides functionality for performing asynchronous writes
+//! to non-blocking file descriptors (FDs). It allows tasks to attempt writing
+//! data to an FD without blocking the executor, enabling efficient handling of
+//! I/O operations in an async environment.
+//!
+//! Various futures within trale implement the `AsyncWrite` trait, and those
+//! that do will allow you to await a call to [AsyncWrite::write].
 use std::{
     future::Future,
     io,
@@ -10,11 +19,20 @@ use libc::EWOULDBLOCK;
 
 use crate::reactor::{Reactor, WakeupKind};
 
+/// Asynchronous writes.
+///
+/// All futures in trale that can be written to will implement this type. You
+/// can call the [AsyncWrite::write] function to obtain a future which will
+/// complete once the requested write has finished (successfully or not).
 pub trait AsyncWrite {
+    /// Return a future that, when `.await`ed will block until the write has
+    /// been successful or not. When successful, the number of bytes that were
+    /// written is returned. Note that this might be *less* than the number of
+    /// bytes in `buf`.
     fn write(&mut self, buf: &[u8]) -> impl Future<Output = io::Result<usize>>;
 }
 
-pub struct AsyncWriter<'a, T: AsFd + Unpin> {
+pub(crate) struct AsyncWriter<'a, T: AsFd + Unpin> {
     pub(crate) fd: T,
     pub(crate) buf: &'a [u8],
 }
