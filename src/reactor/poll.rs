@@ -10,12 +10,12 @@ use std::{
 
 use super::WakeupKind;
 
-struct RwQueue<T: Send + Sync> {
+struct RwQueue<T> {
     readers: VecDeque<T>,
     writers: VecDeque<T>,
 }
 
-impl<T: Send + Sync> RwQueue<T> {
+impl<T> RwQueue<T> {
     fn insert(&mut self, rw: WakeupKind, obj: T) {
         match rw {
             WakeupKind::Readable => self.readers.push_back(obj),
@@ -43,12 +43,12 @@ impl<T: Send + Sync> RwQueue<T> {
     }
 }
 
-pub struct Subscription<T: Send + Sync> {
+pub struct Subscription<T> {
     fd: i32,
     queue: RwQueue<T>,
 }
 
-impl<T: Send + Sync> From<&Subscription<T>> for libc::epoll_event {
+impl<T> From<&Subscription<T>> for libc::epoll_event {
     fn from(value: &Subscription<T>) -> Self {
         let mut events = 0;
 
@@ -67,12 +67,12 @@ impl<T: Send + Sync> From<&Subscription<T>> for libc::epoll_event {
     }
 }
 
-pub struct Poll<T: Send + Sync> {
+pub struct Poll<T> {
     subscriptions: Arc<Mutex<BTreeMap<i32, Subscription<T>>>>,
     epoll: OwnedFd,
 }
 
-impl<T: Send + Sync> Poll<T> {
+impl<T> Poll<T> {
     pub fn new() -> std::io::Result<Self> {
         let epoll = unsafe { libc::epoll_create1(0) };
 
