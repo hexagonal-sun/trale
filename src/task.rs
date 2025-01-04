@@ -65,7 +65,6 @@
 //! need to execute futures:
 //! ```
 //! use trale::task::Executor;
-//! use std::cell::RefCell;
 //! use std::sync::Arc;
 //! use std::sync::Mutex;
 //! use std::thread;
