@@ -94,12 +94,12 @@ impl TcpListener {
             let caddr: CSockAddr = addr.into();
 
             if unsafe { libc::bind(sock.as_raw_fd(), caddr.as_ptr(), caddr.len as _) } == -1 {
-                last_err = std::io::Error::last_os_error().into();
+                last_err = std::io::Error::last_os_error();
                 continue;
             }
 
             match unsafe { libc::listen(sock.as_raw_fd(), 1024) } {
-                -1 => last_err = std::io::Error::last_os_error().into(),
+                -1 => last_err = std::io::Error::last_os_error(),
                 0 => return Ok(Self { inner: sock }),
                 _ => unreachable!("listen() cannot return a value other than 0 or -1"),
             }

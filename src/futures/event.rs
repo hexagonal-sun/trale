@@ -200,7 +200,7 @@ impl Future for EventWaiter<'_> {
                 );
                 Poll::Pending
             }
-            Err(e) => Poll::Ready(Err(e.into())),
+            Err(e) => Poll::Ready(Err(e)),
         }
     }
 }

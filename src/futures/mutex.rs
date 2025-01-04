@@ -114,7 +114,7 @@ impl<T> Mutex<T> {
     pub async fn lock(&self) -> LockGuard<T> {
         let evt = self.evt.clone();
         evt.wait().await.unwrap();
-        LockGuard { mtx: &self }
+        LockGuard { mtx: self }
     }
 }
 
