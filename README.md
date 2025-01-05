@@ -81,59 +81,61 @@ fn main() {
 ### Tasks & Executor
 
 Each `Task` represents an asynchronous computation that needs to be executed. It
-contains a top-level pinned-boxed future, called `future`, which is typically an
-`async` block passed to the `spawn()` function. This function constructs a
-`Task` object and places it on the executor's per-thread run-queue.
+contains a top-level pinned and boxed future, referred to as the `future`, which
+is typically an `async` block passed to the `spawn()` function. This function
+creates a `Task` object and places it on the executor's per-thread run queue.
 
-It is the responsibility of the `Executor` to call `poll()` on this top-level
-task’s future to advance its execution. Since futures are state machines, each
-call to `poll()` modifies the future’s internal state on the heap. If `poll()`
-returns `Poll::Pending`, this allows the future to 'resume' execution at the
-same point when `poll()` is called again. This same process applies to any
-sub-futures that are `.await`ed: `poll()` is called on any sub-futures, which
-may in turn call `poll()` on their sub-futures, continuing until a 'terminal'
-future is reached. Typically, this terminal future will interact with the
-reactor to schedule a wakeup when execution can proceed.
+It is the responsibility of the `Executor` to call `poll()` on a task's
+top-level future to advance its execution. Since futures are state machines,
+each call to `poll()` modifies the future’s internal state on the heap. If
+`poll()` returns `Poll::Pending`, the future will 'resume' execution from the
+same point the next time `poll()` is called. This process is recursive: if a
+future `await`s other futures, `poll()` will be called on those sub-futures as
+well. The recursion continues until a "terminal" future is reached, which
+typically interacts with the reactor to schedule a wakeup when execution can
+proceed.
 
 The `Executor` is responsible for pushing tasks to completion. It consists of a
-run-queue, a wait-queue, and a thread that executes the `poll()` function for
-the top-level futures. The only way to access the executor is via the
-`Executor::get()` function, which ensures that only a single instance of the
-executor is created, using a `OnceCell`.
+run queue and a wait queue. When synchronous code calls either `Executor::run`
+or `Executor::spawn_blocking`, the `Executor::executor_loop` function is invoked
+on the same thread, orchestrating the execution of futures.
 
-When `Executor::get()` is called for the first time, a new thread is spawned to
-execute `executor_loop()`. This loop performs the following:
+The execution loop follows these steps:
 
-1. It removes tasks from the run-queue (or waits if the run-queue is empty).
-2. It places each task on the wait-queue, assuming it will return
-   `Poll::Pending` on the first call to `poll()`.
-3. It calls `poll()` on the task.
-   - If `poll()` returns `Poll::Ready`, the task is removed from the wait-queue
-     and discarded.
-   - If `poll()` returns `Poll::Pending`, the task remains in the wait-queue,
-     and the loop continues by picking the next task from the run-queue.
-
-Whenever a task is ready to be polled again (as determined by the reactor), the
-`Task::wake()` function is called. This removes the task from the wait-queue,
-re-queues it onto the run-queue, and notifies the executor thread if it was
-waiting for new tasks to be added to the run-queue.
+1. **Check for Tasks to Process**: The loop first checks if both the run queue
+   and the wait queue are empty. If both are empty, the loop exits, as there are
+   no more tasks to process.
+2. **Remove a Task**: If there are tasks to process, a task is removed from the
+   run queue.
+   - If the run queue is empty, `epoll_wait` is invoked, via the reactor, to
+     block the thread until a task becomes ready.
+   - When `epoll_wait` returns, the corresponding `Waker` is invoked, which
+     places the task back onto the run queue.
+3. **Poll the Task**: The `Executor` calls `poll()` on the task's future to make
+   progress.
+   - If `poll()` returns `Poll::Ready`, the task is discarded as it has
+     completed.
+   - If `poll()` returns `Poll::Pending`, the task is placed in the wait queue
+     for later processing.
 
 ### Reactor
 
 The Reactor is responsible for invoking `Task::wake()` whenever a task can make
-progress. This typically happens when a file descriptor (FD) changes state and
-becomes readable or writable. The reactor’s job is to associate a task's waker
-with an FD, detect changes on the FD, and trigger the corresponding waker.
+progress. This typically occurs when a file descriptor (FD) changes state, such
+as when it becomes readable or writable. The Reactor's job is to associate a
+task's `Waker` with an FD, detect changes in the FD's state, and trigger the
+corresponding waker.
 
 Terminal futures can register with the reactor via the `register_waker()`
-function. This function takes an FD, a waker, and a flag indicating whether to
-monitor the FD for read or write activity. Once a future registers with the
-reactor, it will return `Poll::Pending` in order to put the task back onto the
-wait-queue (for example, see the `Timer` future).
+function. This function takes a file descriptor (FD), a waker, and a flag
+indicating whether to monitor the FD for read or write activity. Once a future
+registers with the reactor, it should return `Poll::Pending` in order to place
+the task back onto the wait queue (for example, in the case of a `Timer`
+future).
 
-The reactor consists of a separate thread that runs `reactor_loop()`. This loop
-calls `epoll_wait()` repeatedly, which blocks until one or more of the monitored
-FDs change state. Once an event is detected, the reactor maps the event back to
-the associated waker and calls `wake()` on it, which results in the task being
-placed back onto the run-queue.
-
+The reactor has a `wait()` function, which is invoked when the runtime
+determines that no other tasks can make progress. The `wait()` function calls
+`epoll_wait()`, blocking until one or more monitored FDs change state. Once an
+event is detected, the reactor maps the event to the associated waker and calls
+`wake()` on it, which results in the task being placed back onto the run queue
+for execution.
