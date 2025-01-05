@@ -29,9 +29,11 @@ impl Reactor {
 
     pub fn react() {
         REACTOR.with(|r| {
-            let waker = r.borrow_mut().poll.wait();
+            let wakers = r.borrow_mut().poll.wait();
 
-            waker.wake();
+            for waker in wakers.into_iter() {
+                waker.wake();
+            }
         })
     }
 }
