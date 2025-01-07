@@ -1,9 +1,9 @@
 use events::Events;
-use libc::{epoll_event, EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_DEL};
+use libc::{EPOLLIN, EPOLLOUT, EPOLL_CTL_ADD, EPOLL_CTL_DEL, EPOLL_CTL_MOD};
 use log::debug;
 use std::{
     collections::BTreeMap,
-    mem::take,
+    ffi::c_int,
     os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd, RawFd},
     ptr::null_mut,
 };
@@ -29,12 +29,36 @@ impl<T> RwQueue<T> {
         self.readers.is_empty() && self.writers.is_empty()
     }
 
-    fn get(&mut self, flag: u32) -> Vec<T> {
+    fn get_objs_for_flags(&mut self, flag: u32) -> Vec<T> {
+        let mut ret = Vec::new();
+
         if flag & EPOLLIN as u32 != 0 {
-            take(&mut self.readers)
-        } else {
-            take(&mut self.writers)
+            ret.append(&mut self.readers);
         }
+
+        if flag & EPOLLOUT as u32 != 0 {
+            ret.append(&mut self.writers);
+        }
+
+        ret
+    }
+
+    fn get_flags(&self) -> Option<u32> {
+        let mut ret = 0;
+
+        if self.is_empty() {
+            return None;
+        }
+
+        if !self.readers.is_empty() {
+            ret |= EPOLLIN;
+        }
+
+        if !self.writers.is_empty() {
+            ret |= EPOLLOUT;
+        }
+
+        Some(ret as u32)
     }
 
     fn new() -> Self {
@@ -50,22 +74,16 @@ pub struct Subscription<T> {
     queue: RwQueue<T>,
 }
 
-impl<T> From<&Subscription<T>> for libc::epoll_event {
-    fn from(value: &Subscription<T>) -> Self {
-        let mut events = 0;
+impl<T> TryFrom<&Subscription<T>> for libc::epoll_event {
+    type Error = ();
 
-        if !value.queue.readers.is_empty() {
-            events |= EPOLLIN;
-        }
+    fn try_from(value: &Subscription<T>) -> Result<Self, Self::Error> {
+        let flags = value.queue.get_flags().ok_or(())?;
 
-        if !value.queue.writers.is_empty() {
-            events |= EPOLLOUT;
-        }
-
-        libc::epoll_event {
-            events: events as u32,
+        Ok(libc::epoll_event {
+            events: flags,
             u64: value.fd as u64,
-        }
+        })
     }
 }
 
@@ -90,8 +108,15 @@ impl<T> Poll<T> {
 
     pub fn insert(&mut self, fd: RawFd, data: T, kind: WakeupKind) {
         debug!("Inserting FD {fd:} for waking up kind: {kind:?}");
-        if let Some(entry) = self.subscriptions.get_mut(&fd) {
-            entry.queue.insert(kind, data);
+        let sub = if let Some(mut sub) = self.subscriptions.remove(&fd) {
+            sub.queue.insert(kind, data);
+
+            let epoll_event = (&sub).try_into().unwrap();
+
+            self.epoll_ctl(EPOLL_CTL_MOD, fd, Some(epoll_event))
+                .unwrap();
+
+            sub
         } else {
             let mut sub = Subscription {
                 fd,
@@ -100,25 +125,31 @@ impl<T> Poll<T> {
 
             sub.queue.insert(kind, data);
 
-            let mut epoll_event: libc::epoll_event = (&sub).into();
+            let epoll_event = (&sub).try_into().unwrap();
 
-            let ret = unsafe {
-                libc::epoll_ctl(
-                    self.epoll.as_raw_fd(),
-                    EPOLL_CTL_ADD,
-                    fd,
-                    &mut epoll_event as *mut epoll_event,
-                )
-            };
+            self.epoll_ctl(EPOLL_CTL_ADD, fd, Some(epoll_event))
+                .unwrap();
 
-            if ret == -1 {
-                panic!(
-                    "Could not ad FD to epoll {}",
-                    std::io::Error::last_os_error()
-                );
-            }
+            sub
+        };
 
-            self.subscriptions.insert(fd, sub);
+        self.subscriptions.insert(fd, sub);
+    }
+
+    fn epoll_ctl(
+        &self,
+        op: c_int,
+        fd: c_int,
+        mut event: Option<libc::epoll_event>,
+    ) -> std::io::Result<()> {
+        let evt = event.as_mut().map(|x| x as *mut _).unwrap_or(null_mut());
+
+        let ret = unsafe { libc::epoll_ctl(self.epoll.as_raw_fd(), op, fd, evt) };
+
+        if ret == -1 {
+            Err(std::io::Error::last_os_error())
+        } else {
+            Ok(())
         }
     }
 
@@ -130,25 +161,17 @@ impl<T> Poll<T> {
             for evt in events.wait(self.epoll.as_fd()).unwrap() {
                 let idx = evt.u64 as i32;
 
-                if let Some(sub) = self.subscriptions.get_mut(&idx) {
-                    ret.append(&mut sub.queue.get(evt.events));
+                if let Some((fd, mut sub)) = self.subscriptions.remove_entry(&idx) {
+                    ret.append(&mut sub.queue.get_objs_for_flags(evt.events));
 
-                    // TODO: If we have subscribed as both READABLE and
-                    // WRITABLE, now that all objects that have been associated
-                    // with either a READABLE or WRITEABLE event have been
-                    // actioned, we should disable events for that state.
-                    if sub.queue.is_empty() {
-                        let sub = self.subscriptions.remove(&idx).unwrap();
-                        let ret = unsafe {
-                            libc::epoll_ctl(
-                                self.epoll.as_raw_fd(),
-                                EPOLL_CTL_DEL,
-                                sub.fd,
-                                null_mut(),
-                            )
-                        };
-                        if ret == -1 {
-                            panic!("Could not remove fd from epoll");
+                    match (&sub).try_into() {
+                        Ok(epoll_event) => {
+                            self.epoll_ctl(EPOLL_CTL_MOD, sub.fd, Some(epoll_event))
+                                .unwrap();
+                            self.subscriptions.insert(fd, sub);
+                        }
+                        Err(()) => {
+                            self.epoll_ctl(EPOLL_CTL_DEL, sub.fd, None).unwrap();
                         }
                     }
                 }
@@ -169,7 +192,7 @@ mod tests {
         time::Duration,
     };
 
-    use libc::O_NONBLOCK;
+    use libc::{AF_LOCAL, SOCK_NONBLOCK, SOCK_STREAM};
 
     use crate::reactor::WakeupKind;
 
@@ -191,7 +214,8 @@ mod tests {
 
     fn setup_test() -> (OwnedFd, OwnedFd, Poll<u32>) {
         let mut fds = [0, 0];
-        let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), O_NONBLOCK) };
+        let ret =
+            unsafe { libc::socketpair(AF_LOCAL, SOCK_STREAM | SOCK_NONBLOCK, 0, fds.as_mut_ptr()) };
 
         if ret == -1 {
             panic!("Pipe failed");
@@ -277,5 +301,19 @@ mod tests {
         write(fd_wr, &[2]);
 
         t1.join().unwrap();
+    }
+
+    #[test]
+    fn sub_read_and_write() {
+        let (fd1, fd2, mut poll) = setup_test();
+
+        write(fd2.as_fd(), &[1]);
+
+        poll.insert(fd1.as_raw_fd(), 1, WakeupKind::Readable);
+        poll.insert(fd1.as_raw_fd(), 2, WakeupKind::Writable);
+        poll.insert(fd2.as_raw_fd(), 3, WakeupKind::Writable);
+
+        assert_eq!(poll.wait(), [1, 2, 3]);
+        assert!(poll.subscriptions.len() == 0);
     }
 }
