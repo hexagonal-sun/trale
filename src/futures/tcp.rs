@@ -37,7 +37,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use anyhow::{anyhow, Result};
 use libc::{AF_INET, AF_INET6, EALREADY, EINPROGRESS, O_NONBLOCK, SOCK_NONBLOCK, SOCK_STREAM};
 
 use crate::reactor::{Reactor, WakeupKind};
@@ -168,9 +167,9 @@ impl TcpStream {
     /// connection that was able to be established is returned. If connection to
     /// all the addresses failed, then the reason the failture for the *last*
     /// address is returned.
-    pub async fn connect<A: ToSocketAddrs>(addrs: A) -> Result<Self> {
+    pub async fn connect<A: ToSocketAddrs>(addrs: A) -> std::io::Result<Self> {
         let addrs = addrs.to_socket_addrs()?;
-        let mut last_err: anyhow::Error = anyhow!("Could not get socket addr");
+        let mut last_err: std::io::Error = ErrorKind::InvalidData.into();
 
         for addr in addrs {
             let sock = mk_sock(&addr)?;

@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1.0.81"
 libc = "0.2.167"
 log = "0.4.22"
 slab = "0.4.9"
 
 [dev-dependencies]
+anyhow = "1.0.81"
 env_logger = "0.11.6"

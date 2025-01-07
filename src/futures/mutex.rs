@@ -59,7 +59,6 @@
 //! block the thread, causing a deadlock in the main thread because the async
 //! runtime wouldn't be able to progress.
 use super::event::Event;
-use anyhow::Result;
 use std::{
     cell::UnsafeCell,
     ops::{Deref, DerefMut},
@@ -96,7 +95,7 @@ impl<T> Mutex<T> {
     /// fails to be created, then the value is dropped and an error returned. If
     /// the mutex was created, then the mutex which wraps the object is
     /// returned.
-    pub fn new(obj: T) -> Result<Self> {
+    pub fn new(obj: T) -> std::io::Result<Self> {
         let evt = Event::new()?;
         evt.notify_one()?;
 
