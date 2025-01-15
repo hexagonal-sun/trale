@@ -2,6 +2,17 @@
 name = "trale"
 version = "0.1.0"
 edition = "2021"
+authors = ["Matthew Leach <dev@mattleach.net>"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/hexagonal-sun/trale"
+description = """
+Trale is a minimalistic Rust async executor using epoll for efficient, correct
+task execution.
+"""
+categories = ["asynchronous", "network-programming"]
+keywords = ["io", "async", "non-blocking", "futures"]
+
 
 [dependencies]
 libc = "0.2.167"
