@@ -111,7 +111,7 @@ impl<T> Mutex<T> {
     /// then the task is put to sleep and will be rescheduled by the run-time
     /// once the mutex has been unlocked by another task.
     pub async fn lock(&self) -> LockGuard<T> {
-        let evt = self.evt.clone();
+        let mut evt = self.evt.clone();
         evt.wait().await.unwrap();
         LockGuard { mtx: self }
     }

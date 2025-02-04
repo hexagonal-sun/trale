@@ -1,37 +1,26 @@
-use std::{cell::RefCell, os::fd::AsRawFd, task::Waker};
+pub(crate) use io::UringIo;
+use std::{mem::transmute, task::Waker};
+use uring::ReactorUring;
 
-use self::poll::Poll;
+mod io;
+mod uring;
 
-mod poll;
+pub type ReactorIo = UringIo<'static, Waker>;
 
-#[derive(Debug)]
-pub enum WakeupKind {
-    Readable,
-    Writable,
-}
-
-pub(crate) struct Reactor {
-    poll: Poll<Waker>,
-}
+pub(crate) struct Reactor {}
 
 thread_local! {
-    static REACTOR: RefCell<Reactor> = RefCell::new( Reactor {
-        poll: Poll::new().unwrap()
-    });
+    static REACTOR: ReactorUring<Waker> = ReactorUring::new();
 }
 
 impl Reactor {
-    pub fn register_waker(fd: impl AsRawFd, waker: Waker, kind: WakeupKind) {
-        REACTOR.with(|r| {
-            r.borrow_mut().poll.insert(fd.as_raw_fd(), waker, kind);
-        })
+    pub fn new_io() -> ReactorIo {
+        REACTOR.with(|r| unsafe { transmute(r.new_io()) })
     }
 
     pub fn react() {
         REACTOR.with(|r| {
-            let wakers = r.borrow_mut().poll.wait();
-
-            for waker in wakers.into_iter() {
+            for waker in r.react().into_iter() {
                 waker.wake();
             }
         })

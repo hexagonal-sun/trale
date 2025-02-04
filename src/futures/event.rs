@@ -16,7 +16,7 @@
 //!# Executor::block_on(
 //! async {
 //!     let evt = Event::new()?;
-//!     let evt2 = evt.clone();
+//!     let mut evt2 = evt.clone();
 //!     let tsk = Executor::spawn(async move {
 //!         evt2.wait().await.unwrap();
 //!     });
@@ -42,7 +42,7 @@
 //!# Executor::block_on(
 //! async {
 //!     let evt = Event::new()?;
-//!     let evt2 = evt.clone();
+//!     let mut evt2 = evt.clone();
 //!     let evt3 = evt.clone();
 //!     let tsk = Executor::spawn(async move {
 //!         let mut count = 0;
@@ -68,6 +68,7 @@
 //! }
 //!# );
 //! ```
+use io_uring::{opcode, types};
 use libc::{eventfd, EFD_NONBLOCK, EFD_SEMAPHORE};
 use std::{
     ffi::c_void,
@@ -78,14 +79,13 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::reactor::{Reactor, WakeupKind};
+use crate::reactor::{Reactor, ReactorIo};
 
 /// Async event signaller
 ///
 /// Allows events to be signaled between async tasks. Use [Event::new] to create an
 /// event object, await the [Event::wait] future to suspend execution until an event
 /// arrives and [Event::notify_one] to send an event.
-#[derive(Debug)]
 pub struct Event {
     inner: OwnedFd,
 }
@@ -96,6 +96,8 @@ pub struct Event {
 /// [Event::wait()].
 pub struct EventWaiter<'fd> {
     inner: BorrowedFd<'fd>,
+    io: ReactorIo,
+    wait_buf: [u8; std::mem::size_of::<u64>()],
 }
 
 impl Event {
@@ -154,9 +156,11 @@ impl Event {
     /// that if an event has already been sent *before* this function was
     /// called, `.await`ing on the return from this function will return
     /// `Ready`.
-    pub fn wait(&self) -> EventWaiter {
+    pub fn wait(&mut self) -> EventWaiter<'_> {
         EventWaiter {
             inner: self.inner.as_fd(),
+            io: Reactor::new_io(),
+            wait_buf: [0; std::mem::size_of::<u64>()],
         }
     }
 }
@@ -173,35 +177,21 @@ impl Future for EventWaiter<'_> {
     type Output = Result<()>;
 
     fn poll(self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut buf = [0_u8; std::mem::size_of::<u64>()];
+        let this = unsafe { self.get_unchecked_mut() };
 
-        let ret = unsafe {
-            libc::read(
-                self.inner.as_raw_fd(),
-                buf.as_mut_ptr() as *mut _,
-                buf.len(),
-            )
-        };
-
-        match if ret == -1 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(ret)
-        } {
-            Ok(_) => {
-                assert_eq!(u64::from_ne_bytes(buf), 1);
-                Poll::Ready(Ok(()))
-            }
-            Err(e) if e.kind() == ErrorKind::WouldBlock => {
-                Reactor::register_waker(
-                    self.inner.as_raw_fd(),
+        this.io
+            .submit_or_get_result(|| {
+                (
+                    opcode::Read::new(
+                        types::Fd(this.inner.as_raw_fd()),
+                        this.wait_buf.as_mut_ptr(),
+                        this.wait_buf.len() as _,
+                    )
+                    .build(),
                     ctx.waker().clone(),
-                    WakeupKind::Readable,
-                );
-                Poll::Pending
-            }
-            Err(e) => Poll::Ready(Err(e)),
-        }
+                )
+            })
+            .map(|x| x.map(|_| ()))
     }
 }
 
@@ -218,7 +208,7 @@ mod tests {
             let evt = Event::new().unwrap();
 
             let task = {
-                let evt = evt.clone();
+                let mut evt = evt.clone();
                 Executor::spawn(async move {
                     evt.wait().await.unwrap();
                 })
@@ -235,7 +225,7 @@ mod tests {
             let evt = Event::new().unwrap();
 
             let task = {
-                let evt = evt.clone();
+                let mut evt = evt.clone();
                 Executor::spawn(async move {
                     let mut count = 0;
                     while count < 40 {

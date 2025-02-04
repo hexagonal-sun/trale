@@ -15,6 +15,7 @@ keywords = ["io", "async", "non-blocking", "futures"]
 
 
 [dependencies]
+io-uring = "0.7.4"
 libc = "0.2.167"
 log = "0.4.22"
 slab = "0.4.9"

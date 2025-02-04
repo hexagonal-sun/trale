@@ -26,15 +26,18 @@
 use std::{
     future::Future,
     io::Result,
-    os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd},
+    marker::PhantomPinned,
+    os::fd::{AsRawFd, FromRawFd, OwnedFd},
     pin::Pin,
     ptr::null_mut,
     task::{Context, Poll},
     time::{Duration, SystemTime},
 };
 
-use crate::reactor::{Reactor, WakeupKind};
+use io_uring::{opcode, types};
 use libc::{CLOCK_MONOTONIC, TFD_NONBLOCK};
+
+use crate::reactor::{Reactor, ReactorIo};
 
 /// Asynchronous timer.
 ///
@@ -42,20 +45,13 @@ use libc::{CLOCK_MONOTONIC, TFD_NONBLOCK};
 /// can be obtained via the [Timer::sleep] function.
 pub struct Timer {
     expiration: SystemTime,
+    io: ReactorIo,
+    buf: [u8; std::mem::size_of::<u64>()],
     fd: OwnedFd,
+    _phantom: PhantomPinned,
 }
 
 impl Timer {
-    fn compute_tspec(&self) -> libc::itimerspec {
-        let expiration = self.expiration.duration_since(SystemTime::now()).unwrap();
-        let mut tspec = unsafe { std::mem::zeroed::<libc::itimerspec>() };
-
-        tspec.it_value.tv_sec = expiration.as_secs() as _;
-        tspec.it_value.tv_nsec = expiration.subsec_nanos() as _;
-
-        tspec
-    }
-
     /// Put the current task to sleep for the specified duration.
     ///
     /// This function returns a future, that when `.await`ed will suspend the
@@ -73,7 +69,10 @@ impl Timer {
 
         Ok(Self {
             expiration,
+            io: Reactor::new_io(),
+            buf: [0; std::mem::size_of::<u64>()],
             fd: unsafe { OwnedFd::from_raw_fd(timer) },
+            _phantom: PhantomPinned,
         })
     }
 }
@@ -86,19 +85,35 @@ impl Future for Timer {
             return Poll::Ready(());
         }
 
-        let tspec = self.compute_tspec();
+        let this = unsafe { self.get_unchecked_mut() };
 
-        let ret = unsafe {
-            libc::timerfd_settime(self.fd.as_raw_fd(), 0, &tspec as *const _, null_mut())
-        };
+        this.io
+            .submit_or_get_result(|| {
+                let expiration = this.expiration.duration_since(SystemTime::now()).unwrap();
+                let mut tspec = unsafe { std::mem::zeroed::<libc::itimerspec>() };
 
-        if ret == -1 {
-            panic!("timerfd_settime returned error");
-        }
+                tspec.it_value.tv_sec = expiration.as_secs() as _;
+                tspec.it_value.tv_nsec = expiration.subsec_nanos() as _;
 
-        Reactor::register_waker(self.fd.as_fd(), cx.waker().clone(), WakeupKind::Readable);
+                let ret = unsafe {
+                    libc::timerfd_settime(this.fd.as_raw_fd(), 0, &tspec as *const _, null_mut())
+                };
 
-        Poll::Pending
+                if ret == -1 {
+                    panic!("timerfd_settime returned error");
+                }
+
+                (
+                    opcode::Read::new(
+                        types::Fd(this.fd.as_raw_fd()),
+                        this.buf.as_mut_ptr(),
+                        this.buf.len() as _,
+                    )
+                    .build(),
+                    cx.waker().clone(),
+                )
+            })
+            .map(|_| ())
     }
 }
 

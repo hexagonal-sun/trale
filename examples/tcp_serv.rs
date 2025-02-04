@@ -10,7 +10,7 @@ use trale::{
 fn main() -> Result<()> {
     env_logger::init();
 
-    let task1 = Executor::spawn(async {
+    Executor::spawn(async {
         Timer::sleep(Duration::from_millis(500)).unwrap().await;
         println!("Hello A!");
         Timer::sleep(Duration::from_secs(1)).unwrap().await;
@@ -25,6 +25,8 @@ fn main() -> Result<()> {
         let mut buf = [0u8; 1];
         let mut bytes_read: usize = 0;
         let listener = TcpListener::bind("127.0.0.1:5000").context("Could not bind")?;
+
+        println!("Waiting for connection on 127.0.0.1:5000");
 
         let mut conn = listener
             .accept()
@@ -46,9 +48,10 @@ fn main() -> Result<()> {
         }
     });
 
+    Executor::run();
+
     let bytes_read = echo_task.join()?;
     eprintln!("Conversation finished.  Read {bytes_read} bytes");
-    task1.join();
 
     Ok(())
 }

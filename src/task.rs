@@ -94,6 +94,7 @@
 use std::{
     cell::RefCell,
     future::Future,
+    mem::transmute,
     pin::Pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -105,7 +106,10 @@ use std::{
 
 use slab::Slab;
 
-use crate::{futures::event::Event, reactor::Reactor};
+use crate::{
+    futures::event::{Event, EventWaiter},
+    reactor::Reactor,
+};
 
 struct TaskId(AtomicUsize);
 
@@ -150,12 +154,13 @@ thread_local! {
 /// finish from an asynchronous context, use `.await` on the joiner. If the
 /// joiner is dropped then execution of the future continues to completion but
 /// the return value is lost, aka detatch-on-drop.
-pub struct TaskJoiner<T> {
+pub struct TaskJoiner<'a, T> {
     rx: Receiver<T>,
-    finished: Event,
+    _evt: Event,
+    finished: EventWaiter<'a>,
 }
 
-impl<T> TaskJoiner<T> {
+impl<'a, T> TaskJoiner<'a, T> {
     /// Block execution and wait for a task to finish executing. The return
     /// value `T` is the value yielded by the task's future.
     ///
@@ -166,13 +171,11 @@ impl<T> TaskJoiner<T> {
     }
 }
 
-impl<T> Future for TaskJoiner<T> {
+impl<'a, T> Future for TaskJoiner<'a, T> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let mut waiter = self.finished.wait();
-
-        ready!(Pin::new(&mut waiter).poll(cx)).unwrap();
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        ready!(Pin::new(&mut self.finished).poll(cx)).unwrap();
 
         Poll::Ready(self.rx.recv().unwrap())
     }
@@ -186,13 +189,13 @@ impl Executor {
     ///
     /// A [TaskJoiner] is returned which can be used to wait for completion of
     /// the future `f` and obtain it's return value.
-    pub fn spawn<Fut, T>(f: Fut) -> TaskJoiner<T>
+    pub fn spawn<'a, Fut, T>(f: Fut) -> TaskJoiner<'a, T>
     where
         Fut: Future<Output = T> + 'static,
         T: Send + 'static,
     {
         let (tx, rx) = sync_channel(1);
-        let evt = Event::new().unwrap();
+        let mut evt = Event::new().unwrap();
         let evt2 = evt.clone();
 
         let fut = async move {
@@ -210,7 +213,16 @@ impl Executor {
             exec.borrow_mut().run_q.push(task);
         });
 
-        TaskJoiner { rx, finished: evt }
+        // SAFETY: This is safe since the borrowed FD is in the same structure
+        // that contains the waiter, therefore waiter can never outlive the
+        // event.
+        let waiter: EventWaiter<'static> = unsafe { transmute(evt.wait()) };
+
+        TaskJoiner {
+            rx,
+            _evt: evt,
+            finished: waiter,
+        }
     }
 
     /// A convenience function for waiting on a future from a synchronous

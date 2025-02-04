@@ -7,7 +7,7 @@ use trale::{
 };
 
 fn main() -> Result<()> {
-    let task1 = Executor::spawn(async {
+    Executor::spawn(async {
         Timer::sleep(Duration::from_millis(500)).unwrap().await;
         println!("Hello A!");
         Timer::sleep(Duration::from_secs(1)).unwrap().await;
@@ -32,9 +32,10 @@ fn main() -> Result<()> {
         }
     });
 
+    Executor::run();
+
     let bytes_read = echo_task.join()?;
     eprintln!("Conversation finished.  Read {bytes_read} bytes");
-    task1.join();
 
     Ok(())
 }

@@ -3,7 +3,7 @@ use std::time::Duration;
 use trale::{futures::timer::Timer, task::Executor};
 
 fn main() {
-    let task1 = Executor::spawn(async {
+    Executor::block_on(async {
         Timer::sleep(Duration::from_secs(2)).unwrap().await;
         println!("Hello A!");
 
@@ -23,6 +23,4 @@ fn main() {
         Timer::sleep(Duration::from_secs(1)).unwrap().await;
         println!("Hello C!");
     });
-
-    task1.join();
 }
