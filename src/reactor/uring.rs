@@ -1,9 +1,10 @@
 use std::cell::RefCell;
-
+use io::RingResults;
+pub(crate) use io::UringIo;
 use io_uring::{squeue, IoUring};
 use slab::Slab;
 
-use super::io::{RingResults, UringIo};
+mod io;
 
 pub struct ReactorUring<T>(RefCell<ReactorInner<T>>);
 
@@ -21,7 +22,7 @@ impl<T> ReactorUring<T> {
     }
 }
 
-pub(super) struct ReactorInner<T> {
+struct ReactorInner<T> {
     uring: IoUring,
     objs: Slab<(T, usize)>,
     pub results: RingResults,

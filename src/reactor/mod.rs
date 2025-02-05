@@ -1,8 +1,6 @@
-pub(crate) use io::UringIo;
 use std::{mem::transmute, task::Waker};
-use uring::ReactorUring;
+use uring::{ReactorUring, UringIo};
 
-mod io;
 mod uring;
 
 pub type ReactorIo = UringIo<'static, Waker>;

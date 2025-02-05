@@ -3,7 +3,7 @@ use std::{cell::RefCell, task::Poll};
 use io_uring::squeue;
 use slab::Slab;
 
-use super::uring::ReactorInner;
+use super::ReactorInner;
 
 #[derive(Debug)]
 pub(crate) enum IoState {
