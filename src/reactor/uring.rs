@@ -1,24 +1,28 @@
-use std::cell::RefCell;
 use io::RingResults;
 pub(crate) use io::UringIo;
 use io_uring::{squeue, IoUring};
 use slab::Slab;
+use std::cell::RefCell;
 
 mod io;
 
-pub struct ReactorUring<T>(RefCell<ReactorInner<T>>);
+pub struct ReactorUring<T> {
+    inner: RefCell<ReactorInner<T>>,
+}
 
 impl<T> ReactorUring<T> {
     pub fn new() -> Self {
-        Self(RefCell::new(ReactorInner::new()))
+        Self {
+            inner: RefCell::new(ReactorInner::new()),
+        }
     }
 
     pub fn new_io(&self) -> UringIo<'_, T> {
-        UringIo::new(&self.0)
+        UringIo::new(&self.inner)
     }
 
     pub fn react(&self) -> Vec<T> {
-        self.0.borrow_mut().react()
+        self.inner.borrow_mut().react()
     }
 }
 
@@ -122,7 +126,7 @@ mod tests {
 
         f(a, b, &mut uring);
 
-        assert_eq!(uring.0.borrow().results.0.len(), 0);
+        assert_eq!(uring.inner.borrow().results.0.len(), 0);
     }
 
     #[test]
