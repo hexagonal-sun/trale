@@ -29,7 +29,7 @@ impl<T> ReactorUring<T> {
 struct ReactorInner<T> {
     uring: IoUring,
     objs: Slab<(T, usize)>,
-    pub results: RingResults,
+    results: RingResults,
 }
 
 impl<T> ReactorInner<T> {
