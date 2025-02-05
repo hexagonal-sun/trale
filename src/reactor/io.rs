@@ -65,11 +65,8 @@ impl<'a, T> UringIo<'a, T> {
 
 impl<'a, T> Drop for UringIo<'a, T> {
     fn drop(&mut self) {
-        match &self.state {
-            IoState::Submitted(slot) => {
-                self.ring.borrow_mut().results.drop_result(*slot);
-            }
-            _ => {}
+        if let IoState::Submitted(slot) = self.state {
+            self.ring.borrow_mut().results.drop_result(slot);
         }
     }
 }
