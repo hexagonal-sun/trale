@@ -41,15 +41,21 @@ pub(crate) struct AsyncReader<'a, T: AsFd + Unpin> {
 impl<T: AsFd + Unpin> Future for AsyncReader<'_, T> {
     type Output = io::Result<usize>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let entry = opcode::Read::new(
-            types::Fd(self.fd.as_fd().as_raw_fd()),
-            self.buf.as_mut_ptr(),
-            self.buf.len() as _,
-        );
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
 
-        self.io
-            .submit_or_get_result(|| (entry.build(), cx.waker().clone()))
+        this.io
+            .submit_or_get_result(|| {
+                (
+                    opcode::Read::new(
+                        types::Fd(this.fd.as_fd().as_raw_fd()),
+                        this.buf.as_mut_ptr(),
+                        this.buf.len() as _,
+                    )
+                    .build(),
+                    cx.waker().clone(),
+                )
+            })
             .map(|x| x.map(|x| x as _))
     }
 }
