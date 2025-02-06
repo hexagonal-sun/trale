@@ -1,8 +1,8 @@
 use io::RingResults;
 pub(crate) use io::UringIo;
-use io_uring::{squeue, IoUring};
+use io_uring::{squeue, CompletionQueue, IoUring};
 use slab::Slab;
-use std::cell::RefCell;
+use std::cell::{RefCell, RefMut};
 
 mod io;
 
@@ -21,8 +21,23 @@ impl<T> ReactorUring<T> {
         UringIo::new(&self.inner)
     }
 
-    pub fn react(&self) -> Vec<T> {
-        self.inner.borrow_mut().react()
+    pub fn react(&self) -> IoCompletionIter<'_, T> {
+        let mut borrow = self.inner.borrow_mut();
+
+        borrow.uring.submit_and_wait(1).unwrap();
+
+        // SAFETY: This object lives along side both the `objs` and `results`
+        // RefMuts. Therefore, `borrow` will remained borrowed for the lifetime
+        // of both `objs` and `results` making the change to `'a` safe.
+        let compl_queue = unsafe { std::mem::transmute(borrow.uring.completion()) };
+
+        let (objs, results) = RefMut::map_split(borrow, |x| (&mut x.objs, &mut x.results));
+
+        IoCompletionIter {
+            compl_queue,
+            objs,
+            results,
+        }
     }
 }
 
@@ -55,19 +70,24 @@ impl<T> ReactorInner<T> {
 
         result_idx
     }
+}
 
-    pub fn react(&mut self) -> Vec<T> {
-        self.uring.submit_and_wait(1).unwrap();
-        let completions = unsafe { self.uring.completion_shared() };
+pub struct IoCompletionIter<'a, T> {
+    compl_queue: CompletionQueue<'a>,
+    objs: RefMut<'a, Slab<(T, usize)>>,
+    results: RefMut<'a, RingResults>,
+}
 
-        completions
-            .map(|x| {
-                let (obj, result_idx) = self.objs.remove(x.user_data() as usize);
-                self.results.set_result(x.result(), result_idx);
+impl<T> Iterator for IoCompletionIter<'_, T> {
+    type Item = T;
 
-                obj
-            })
-            .collect()
+    fn next(&mut self) -> Option<Self::Item> {
+        let entry = self.compl_queue.next()?;
+
+        let (obj, result_idx) = self.objs.remove(entry.user_data() as usize);
+        self.results.set_result(entry.result(), result_idx);
+
+        Some(obj)
     }
 }
 
@@ -148,9 +168,12 @@ mod tests {
                 write(b, &[2]);
             });
 
-            let objs = uring.react();
+            let mut objs = uring.react();
 
-            assert_eq!(objs, vec![10]);
+            assert_eq!(objs.next(), Some(10));
+            assert_eq!(objs.next(), None);
+
+            drop(objs);
 
             let result =
                 io.submit_or_get_result(|| panic!("Should not be called, as result will be ready"));
@@ -183,9 +206,10 @@ mod tests {
                 write(b, &[2]);
             });
 
-            let objs = uring.react();
+            let mut objs = uring.react();
 
-            assert_eq!(objs, vec![10]);
+            assert_eq!(objs.next(), Some(10));
+            assert_eq!(objs.next(), None);
 
             t1.join().unwrap();
         });
@@ -213,9 +237,12 @@ mod tests {
                 assert_eq!(buf, [0]);
             });
 
-            let objs = uring.react();
+            let mut objs = uring.react();
 
-            assert_eq!(objs, vec![20]);
+            assert_eq!(objs.next(), Some(20));
+            assert_eq!(objs.next(), None);
+
+            drop(objs);
 
             let result =
                 io.submit_or_get_result(|| panic!("Should not be called, as result will be ready"));
@@ -257,7 +284,7 @@ mod tests {
                 write(b, &[0xde, 0xad]);
             });
 
-            let objs = uring.react();
+            let objs: Vec<_> = uring.react().collect();
 
             assert_eq!(objs.len(), 2);
             assert!(objs.contains(&10));
@@ -311,7 +338,7 @@ mod tests {
                 read(b, &mut buf);
             });
 
-            let objs = uring.react();
+            let objs: Vec<_> = uring.react().collect();
 
             assert_eq!(objs.len(), 2);
             assert!(objs.contains(&10));
