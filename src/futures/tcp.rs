@@ -206,6 +206,7 @@ impl AsyncRead for TcpStream {
             fd: self.inner.as_fd(),
             io: Reactor::new_io(),
             buf,
+            seekable: false,
         }
     }
 }
@@ -216,6 +217,7 @@ impl AsyncWrite for TcpStream {
             fd: self.inner.as_fd(),
             io: Reactor::new_io(),
             buf,
+            seekable: false,
         }
     }
 }

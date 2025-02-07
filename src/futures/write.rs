@@ -36,6 +36,7 @@ pub(crate) struct AsyncWriter<'a, T: AsFd + Unpin> {
     pub(crate) fd: T,
     pub(crate) io: ReactorIo,
     pub(crate) buf: &'a [u8],
+    pub(crate) seekable: bool,
 }
 
 impl<T: AsFd + Unpin> Future for AsyncWriter<'_, T> {
@@ -52,6 +53,7 @@ impl<T: AsFd + Unpin> Future for AsyncWriter<'_, T> {
                         this.buf.as_ptr(),
                         this.buf.len() as _,
                     )
+                    .offset(if this.seekable { u64::MAX } else { 0 })
                     .build(),
                     cx.waker().clone(),
                 )
