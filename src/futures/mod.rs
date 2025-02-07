@@ -15,6 +15,7 @@
 //! The following sub-modules are exposed by the `futures` module:
 //!
 //! - `event`: Provides futures for inter-task event signaling.
+//! - `fs`: Provides futures for interacting with the\ filesystem.
 //! - `mutex`: Implements futures for task synchronization using a mutex-like primitive.
 //! - `read`: Implements futures for reading from non-blocking file descriptors.
 //! - `tcp`: Provides futures for handling TCP socket operations.
@@ -26,6 +27,7 @@
 //! functionality, enabling the reactor to monitor and interact with various
 //! asynchronous operations.
 pub mod event;
+pub mod fs;
 pub mod mutex;
 pub mod read;
 mod sock_addr;
