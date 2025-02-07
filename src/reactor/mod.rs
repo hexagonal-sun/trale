@@ -18,7 +18,7 @@ impl Reactor {
 
     pub fn react() {
         REACTOR.with(|r| {
-            for waker in r.react().into_iter() {
+            for waker in r.react() {
                 waker.wake();
             }
         })

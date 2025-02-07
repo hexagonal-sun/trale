@@ -29,7 +29,11 @@ impl<T> ReactorUring<T> {
         // SAFETY: This object lives along side both the `objs` and `results`
         // RefMuts. Therefore, `borrow` will remained borrowed for the lifetime
         // of both `objs` and `results` making the change to `'a` safe.
-        let compl_queue = unsafe { std::mem::transmute(borrow.uring.completion()) };
+        let compl_queue = unsafe {
+            std::mem::transmute::<io_uring::CompletionQueue<'_>, io_uring::CompletionQueue<'_>>(
+                borrow.uring.completion(),
+            )
+        };
 
         let (objs, results) = RefMut::map_split(borrow, |x| (&mut x.objs, &mut x.results));
 
