@@ -1,5 +1,3 @@
-#![feature(seek_stream_len)]
-
 use anyhow::Context;
 use clap::Parser;
 use core::str;
@@ -83,7 +81,9 @@ async fn send_response_hdr(
 async fn send_file(mut conn: TcpStream, path: PathBuf) -> anyhow::Result<()> {
     match File::open(path).await {
         Ok(mut f) => {
-            let len = f.stream_len()? as usize;
+            let len = f.seek(std::io::SeekFrom::End(0))? as usize;
+
+            f.seek(std::io::SeekFrom::Start(0))?;
 
             send_response_hdr(&mut conn, Response::Ok, len).await?;
 
