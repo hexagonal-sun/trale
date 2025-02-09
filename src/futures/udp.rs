@@ -67,7 +67,7 @@ impl UdpSocket {
     ///#     Ok::<(), std::io::Error>(())
     /// };
     /// ```
-    pub fn recv_from<'a>(&'a mut self, buf: &'a mut [u8]) -> RecvFrom {
+    pub fn recv_from<'a, 'b>(&'a mut self, buf: &'b mut [u8]) -> RecvFrom<'a, 'b> {
         RecvFrom {
             sock: &self.inner,
             io: Reactor::new_io(),
@@ -92,7 +92,11 @@ impl UdpSocket {
     ///#     Ok::<(), std::io::Error>(())
     /// };
     /// ```
-    pub fn send_to<'a, A: ToSocketAddrs>(&'a self, buf: &'a [u8], target: A) -> SendTo<A> {
+    pub fn send_to<'a, 'b, A: ToSocketAddrs>(
+        &'a self,
+        buf: &'b [u8],
+        target: A,
+    ) -> SendTo<'a, 'b, A> {
         SendTo {
             sock: &self.inner,
             dst: target,
