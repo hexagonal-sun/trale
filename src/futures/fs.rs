@@ -58,6 +58,16 @@ pub struct File {
     inner: OwnedFd,
 }
 
+/// A future for creating a directory.
+///
+/// This future can be `.await`ed in order to create a directory. If the
+/// directory could not be created an `Err` value is returned with the
+/// underlying error indicating the reason for failure.
+pub struct Mkdir {
+    io: ReactorIo,
+    path: CString,
+}
+
 /// A future for opening a file.
 ///
 /// This future can be `.await`ed in order to obtain an open [File] object. It
@@ -97,6 +107,27 @@ impl Future for FileOpen {
     }
 }
 
+impl Future for Mkdir {
+    type Output = Result<()>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = unsafe { self.get_unchecked_mut() };
+
+        this.io
+            .submit_or_get_result(|| {
+                (
+                    opcode::MkDirAt::new(types::Fd(libc::AT_FDCWD), this.path.as_ptr())
+                        .mode(0o777)
+                        .build(),
+                    cx.waker().clone(),
+                )
+            })
+            .map(|x| x.map(|_| ()))
+    }
+}
 impl File {
     /// Attempt to open an existing file.
     ///
@@ -122,6 +153,18 @@ impl File {
             path: CString::new(path.as_ref().as_os_str().as_encoded_bytes()).unwrap(),
             flags: O_RDWR | O_CREAT,
             io: Reactor::new_io(),
+        }
+    }
+
+    /// Attempt to create a new directory.
+    ///
+    /// This function takes a path and returns a future which attempts to create
+    /// the specified directory. If the path is relative, the base path is the
+    /// CWD of the program.
+    pub fn mkdir(path: impl AsRef<Path>) -> Mkdir {
+        Mkdir {
+            io: Reactor::new_io(),
+            path: CString::new(path.as_ref().as_os_str().as_encoded_bytes()).unwrap(),
         }
     }
 }
@@ -308,5 +351,17 @@ mod tests {
             f.read(&mut buf).await.unwrap();
             assert_eq!(buf, "ef".as_bytes());
         });
+    }
+
+    #[test]
+    fn simple_mkdir() {
+        let dir = TempDir::new().unwrap();
+        let dir_path = dir.to_path_buf();
+
+        Executor::block_on(async move {
+            super::File::mkdir(dir_path.join("test_dir")).await.unwrap();
+        });
+
+        assert!(dir.child("test_dir").is_dir());
     }
 }
