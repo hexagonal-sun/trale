@@ -1,5 +1,16 @@
 # `trale`: Tiny Rust Async Linux Executor
 
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+[![Build Status][actions-badge]][actions-url]
+
+[crates-badge]: https://img.shields.io/crates/v/trale.svg
+[crates-url]: https://crates.io/crates/trale
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/hexagonal-sun/trale/blob/master/LICENSE
+[actions-badge]: https://github.com/hexagonal-sun/trale/workflows/Rust/badge.svg
+[actions-url]: https://github.com/hexagonal-sun/trale/actions?query=branch%3Amaster
+
 This project implements a minimalistic asynchronous Rust executor, written in as
 few lines as possible. Its primary goal is to serve as an educational resource
 for those studying Rust's async ecosystem. It provides a *real* executor capable
