@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/hexagonal-sun/trale"
 description = """
-Trale is a minimalistic Rust async executor using epoll for efficient, correct
+Trale is a minimalistic Rust async executor using io_uring for efficient, correct
 task execution.
 """
 categories = ["asynchronous", "network-programming"]

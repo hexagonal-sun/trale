@@ -6,13 +6,15 @@ for those studying Rust's async ecosystem. It provides a *real* executor capable
 of running multiple async tasks on a single thread, showcasing a simple yet
 functional concrete implementation.
 
-To achieve this, `trale` tightly integrates with Linux's `epoll` interface,
-opting for minimal abstractions to prioritize performance. While it sacrifices
-some abstraction in favor of efficiency, **correctness** is not compromised.
+To achieve this, `trale` tightly integrates with Linux's `io_uring` interface,
+opting for minimal abstractions to prioritise performance. While it sacrifices
+some abstraction in favour of efficiency, **correctness** is not compromised.
 
 ## Supported Features
 
-- **`epoll`-based reactor**: Handles task wake-ups when events are fired.
+- **`io_uring`-based reactor**: State-of-the-art reactor utilising Linux's
+  latest I/O userspace
+  interface,[`io_uring`](https://man7.org/linux/man-pages/man7/io_uring.7.html).
 - **Single-threaded executor**: Polls tasks on a runqueue and moves them to an
   idle queue when waiting for wakeups from the reactor.
 - **Timer using `TimerFd`**: Leverages Linux's
@@ -107,10 +109,11 @@ The execution loop follows these steps:
    no more tasks to process.
 2. **Remove a Task**: If there are tasks to process, a task is removed from the
    run queue.
-   - If the run queue is empty, `epoll_wait` is invoked, via the reactor, to
-     block the thread until a task becomes ready.
-   - When `epoll_wait` returns, the corresponding `Waker` is invoked, which
-     places the task back onto the run queue.
+   - If the run queue is empty, `io_uring_enter` is invoked, via the reactor, to
+     block the thread until an I/O event completes.
+   - When `io_uring_enter` returns, the corresponding all I/O events that have
+     completed have their corresponding `Waker`s called which places the task on
+     the runqueue.
 3. **Poll the Task**: The `Executor` calls `poll()` on the task's future to make
    progress.
    - If `poll()` returns `Poll::Ready`, the task is discarded as it has
@@ -121,21 +124,34 @@ The execution loop follows these steps:
 ### Reactor
 
 The Reactor is responsible for invoking `Task::wake()` whenever a task can make
-progress. This typically occurs when a file descriptor (FD) changes state, such
-as when it becomes readable or writable. The Reactor's job is to associate a
-task's `Waker` with an FD, detect changes in the FD's state, and trigger the
-corresponding waker.
+progress. This typically occurs when some I/O operation completes. Each future
+that requires I/O interaction needs to obtain a handle to the reactor's I/O
+interface via `Reactor::new_io()`. This handle, represented by `ReactorIo`, is
+used for submitting I/O operations and retrieving their results. The key
+function for interacting with the reactor is `submit_or_get_result()`. This
+function is designed to be called within the `poll()` method of a future,
+providing a bridge between the future and the reactor.
 
-Terminal futures can register with the reactor via the `register_waker()`
-function. This function takes a file descriptor (FD), a waker, and a flag
-indicating whether to monitor the FD for read or write activity. Once a future
-registers with the reactor, it should return `Poll::Pending` in order to place
-the task back onto the wait queue (for example, in the case of a `Timer`
-future).
+The `submit_or_get_result()` function takes a closure that is responsible for
+creating an I/O operation, which is encapsulated in an `Entry`, and associates
+it with a `Waker` to notify the task when the operation has completed. The
+`Entry` describes the type of I/O operation, such as a read or write, and
+contains the necessary arguments to be passed to the kernel. The `Waker` is used
+to wake the task once the I/O operation is ready to be processed.
 
-The reactor has a `wait()` function, which is invoked when the runtime
-determines that no other tasks can make progress. The `wait()` function calls
-`epoll_wait()`, blocking until one or more monitored FDs change state. Once an
-event is detected, the reactor maps the event to the associated waker and calls
-`wake()` on it, which results in the task being placed back onto the run queue
-for execution.
+One of the most important characteristics of this system is that the closure
+provided to `submit_or_get_result()` is invoked only once to submit the I/O
+request to the kernel. This design isn't just a performance optimisation; it
+also addresses soundness concerns. Since buffers and other resources are shared
+between the user space and the kernel, submitting the same I/O operation
+multiple times could lead to serious issues. For instance, if a future were
+polled more than once and the I/O request were re-submitted, the original
+submission might contain references to deallocated memory, invalid file
+descriptors, or other corrupted state. By ensuring that the closure is only
+called once, we avoid these potential pitfalls. On the first call, the function
+returns `Poll::Pending`, placing the task in a pending state until the operation
+completes. If the task is polled again before the I/O has finished, it simply
+returns `Poll::Pending` without invoking the closure, as the reactor already
+knows about the pending I/O operation. Once the I/O completes,
+`submit_or_get_result()` returns `Poll::Ready` with the result of the I/O
+operation, encapsulated in a `std::io::Result<i32>`.

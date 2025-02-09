@@ -6,10 +6,10 @@
 //! executor capable of running multiple async tasks on a single thread,
 //! showcasing a simple yet functional concrete implementation.
 //!
-//! To achieve this, `trale` tightly integrates with Linux's `epoll` interface,
-//! opting for minimal abstractions to prioritize performance. While it
-//! sacrifices some abstraction in favor of efficiency, **correctness** is not
-//! compromised.
+//! To achieve this, `trale` tightly integrates with Linux's `io_uring`
+//! interface, opting for minimal abstractions to prioritize performance. While
+//! it sacrifices some abstraction in favor of efficiency, **correctness** is
+//! not compromised.
 //!
 //! For information about spawning and managing tasks, refer to the [task]
 //! module. To see what futures are provided, see the [futures] module.
