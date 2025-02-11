@@ -51,13 +51,19 @@ struct ReactorInner<T> {
     results: RingResults,
 }
 
+enum IoKind {
+    Oneshot,
+    Multi,
+}
+
 struct PendingIo<T> {
     assoc_obj: T,
     result_slab_idx: usize,
+    kind: IoKind,
 }
 
 impl<T> ReactorInner<T> {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             uring: IoUring::new(1024).unwrap(),
             pending: Slab::new(),
@@ -65,7 +71,7 @@ impl<T> ReactorInner<T> {
         }
     }
 
-    pub fn submit_io(&mut self, entry: squeue::Entry, obj: T) -> usize {
+    fn submit_io(&mut self, entry: squeue::Entry, obj: T) -> usize {
         let result_slab_idx = self.results.create_slot();
 
         let slot = self.pending.insert(PendingIo {
@@ -158,7 +164,7 @@ mod tests {
 
         f(a, b, &mut uring);
 
-        assert_eq!(uring.inner.borrow().results.0.len(), 0);
+        assert!(uring.inner.borrow().results.is_empty());
     }
 
     #[test]

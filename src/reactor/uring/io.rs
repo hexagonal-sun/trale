@@ -6,7 +6,7 @@ use slab::Slab;
 use super::ReactorInner;
 
 #[derive(Debug)]
-pub(crate) enum IoState {
+enum IoState {
     New,
     Submitted(usize),
     Finished(i32),
@@ -71,7 +71,7 @@ impl<'a, T> Drop for UringIo<'a, T> {
     }
 }
 
-pub struct RingResults(pub(super) Slab<ResultState>);
+pub struct RingResults(Slab<ResultState>);
 
 pub(super) enum ResultState {
     Pending,
@@ -82,6 +82,11 @@ pub(super) enum ResultState {
 impl RingResults {
     pub fn new() -> Self {
         Self(Slab::new())
+    }
+
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 
     pub fn set_result(&mut self, result: i32, idx: usize) {
