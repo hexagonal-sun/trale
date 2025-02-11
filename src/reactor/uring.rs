@@ -35,11 +35,11 @@ impl<T> ReactorUring<T> {
             )
         };
 
-        let (objs, results) = RefMut::map_split(borrow, |x| (&mut x.objs, &mut x.results));
+        let (pending, results) = RefMut::map_split(borrow, |x| (&mut x.pending, &mut x.results));
 
         IoCompletionIter {
             compl_queue,
-            objs,
+            pending,
             results,
         }
     }
@@ -47,23 +47,31 @@ impl<T> ReactorUring<T> {
 
 struct ReactorInner<T> {
     uring: IoUring,
-    objs: Slab<(T, usize)>,
+    pending: Slab<PendingIo<T>>,
     results: RingResults,
+}
+
+struct PendingIo<T> {
+    assoc_obj: T,
+    result_slab_idx: usize,
 }
 
 impl<T> ReactorInner<T> {
     pub fn new() -> Self {
         Self {
             uring: IoUring::new(1024).unwrap(),
-            objs: Slab::new(),
+            pending: Slab::new(),
             results: RingResults::new(),
         }
     }
 
     pub fn submit_io(&mut self, entry: squeue::Entry, obj: T) -> usize {
-        let result_idx = self.results.create_slot();
+        let result_slab_idx = self.results.create_slot();
 
-        let slot = self.objs.insert((obj, result_idx));
+        let slot = self.pending.insert(PendingIo {
+            assoc_obj: obj,
+            result_slab_idx,
+        });
 
         unsafe {
             self.uring
@@ -72,13 +80,13 @@ impl<T> ReactorInner<T> {
                 .unwrap();
         }
 
-        result_idx
+        result_slab_idx
     }
 }
 
 pub struct IoCompletionIter<'a, T> {
     compl_queue: CompletionQueue<'a>,
-    objs: RefMut<'a, Slab<(T, usize)>>,
+    pending: RefMut<'a, Slab<PendingIo<T>>>,
     results: RefMut<'a, RingResults>,
 }
 
@@ -88,10 +96,10 @@ impl<T> Iterator for IoCompletionIter<'_, T> {
     fn next(&mut self) -> Option<Self::Item> {
         let entry = self.compl_queue.next()?;
 
-        let (obj, result_idx) = self.objs.remove(entry.user_data() as usize);
-        self.results.set_result(entry.result(), result_idx);
+        let pending_io = self.pending.remove(entry.user_data() as usize);
+        self.results.set_result(entry.result(), pending_io.result_slab_idx);
 
-        Some(obj)
+        Some(pending_io.assoc_obj)
     }
 }
 
