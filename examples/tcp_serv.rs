@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use log::debug;
+use tokio_stream::StreamExt;
 use trale::{
     futures::{read::AsyncRead, tcp::TcpListener, timer::Timer, write::AsyncWrite},
     task::{Executor, TaskJoiner},
@@ -24,13 +25,14 @@ fn main() -> Result<()> {
     let echo_task: TaskJoiner<Result<usize>> = Executor::spawn(async {
         let mut buf = [0u8; 1];
         let mut bytes_read: usize = 0;
-        let listener = TcpListener::bind("127.0.0.1:5000").context("Could not bind")?;
+        let mut listener = TcpListener::bind("127.0.0.1:5000").context("Could not bind")?;
 
         println!("Waiting for connection on 127.0.0.1:5000");
 
         let mut conn = listener
-            .accept()
+            .next()
             .await
+            .unwrap()
             .context("Could not accept incoming connection")?;
 
         // We only want to accept a single connection. Drop the lisetner once

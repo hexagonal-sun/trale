@@ -13,16 +13,18 @@
 //! use trale::futures::tcp::TcpListener;
 //! use trale::futures::read::AsyncRead;
 //! use trale::futures::write::AsyncWrite;
+//! use tokio_stream::StreamExt;
 //! async {
-//!     let listener = TcpListener::bind("0.0.0.0:8888")?;
-//!     let mut sock = listener.accept().await?;
+//!     let mut listener = TcpListener::bind("0.0.0.0:8888")?;
+//!     while let Some(Ok(mut sock)) = listener.next().await {
 //!     let mut buf = [0u8; 1];
-//!     loop {
-//!         let len = sock.read(&mut buf).await?;
-//!         if len == 0 {
-//!             return Ok(());
+//!         loop {
+//!             let len = sock.read(&mut buf).await?;
+//!             if len == 0 {
+//!                 return Ok(());
+//!             }
+//!             sock.write(&buf).await?;
 //!         }
-//!         sock.write(&buf).await?;
 //!     }
 //!#     Ok::<(), std::io::Error>(())
 //! };
@@ -33,12 +35,12 @@ use std::{
     net::{SocketAddr, ToSocketAddrs},
     os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd},
     pin::Pin,
-    ptr::null_mut,
     task::{Context, Poll},
 };
 
 use io_uring::{opcode, types};
 use libc::{AF_INET, AF_INET6, SOCK_STREAM};
+use tokio_stream::Stream;
 
 use crate::reactor::{Reactor, ReactorIo};
 
@@ -54,14 +56,6 @@ use super::{
 /// accept connections on the specified address.
 pub struct TcpListener {
     inner: OwnedFd,
-}
-
-/// A future for accepting new connections.
-///
-/// Call `.await` to pause the current task until a new connection has been
-/// established.
-pub struct Acceptor<'fd> {
-    inner: BorrowedFd<'fd>,
     io: ReactorIo,
 }
 
@@ -85,8 +79,11 @@ impl TcpListener {
     /// This function will create a new socket, bind it to one of the specified
     /// `addrs` and returna [TcpListener]. If binding to *all* of the specified
     /// addresses fails then the reason for failing to bind to the *last*
-    /// address is returned. Otherwise, use [TcpListener::accept] to obtain a
-    /// future to accept new connections.
+    /// address is returned. Otherwise, `.await` on the listener to await a new
+    /// connection.
+    ///
+    /// When this future returns None, the listener will no long accept any
+    /// further connections and should be dropped.
     pub fn bind(addrs: impl ToSocketAddrs) -> std::io::Result<Self> {
         let addrs = addrs.to_socket_addrs()?;
         let mut last_err = ErrorKind::NotFound.into();
@@ -102,38 +99,38 @@ impl TcpListener {
 
             match unsafe { libc::listen(sock.as_raw_fd(), 1024) } {
                 -1 => last_err = std::io::Error::last_os_error(),
-                0 => return Ok(Self { inner: sock }),
+                0 => {
+                    return Ok(Self {
+                        inner: sock,
+                        io: Reactor::new_multishot_io(),
+                    })
+                }
                 _ => unreachable!("listen() cannot return a value other than 0 or -1"),
             }
         }
 
         Err(last_err)
     }
-
-    /// Return a future for accepting a new connection.
-    ///
-    /// You can `.await` the returned future to wait for a new incoming
-    /// connection. Once a connection has been successfully established, a new
-    /// [TcpStream] is returned which is connected to the peer.
-    pub fn accept(&self) -> Acceptor {
-        Acceptor {
-            inner: self.inner.as_fd(),
-            io: Reactor::new_io(),
-        }
-    }
 }
 
-impl Future for Acceptor<'_> {
-    type Output = std::io::Result<TcpStream>;
+impl Stream for TcpListener {
+    type Item = std::io::Result<TcpStream>;
 
-    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let entry = opcode::Accept::new(types::Fd(self.inner.as_raw_fd()), null_mut(), null_mut());
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
 
-        self.io
-            .submit_or_get_result(|| (entry.build(), cx.waker().clone()))
+        this.io
+            .submit_or_get_result(|| {
+                (
+                    opcode::AcceptMulti::new(types::Fd(this.inner.as_raw_fd())).build(),
+                    cx.waker().clone(),
+                )
+            })
             .map(|x| {
-                x.map(|fd| TcpStream {
-                    inner: unsafe { OwnedFd::from_raw_fd(fd) },
+                Some({
+                    x.map(|fd| TcpStream {
+                        inner: unsafe { OwnedFd::from_raw_fd(fd) },
+                    })
                 })
             })
     }

@@ -8,6 +8,7 @@ use std::{
     path::PathBuf,
     sync::OnceLock,
 };
+use tokio_stream::StreamExt;
 use trale::{
     futures::{
         fs::File,
@@ -151,12 +152,12 @@ fn main() -> anyhow::Result<()> {
 
     ARGS.set(args).expect("Should have never been set");
 
-    let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, ARGS.get().unwrap().port))
+    let mut listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, ARGS.get().unwrap().port))
         .context("Could not setup socket listener")?;
 
     Executor::block_on(async move {
-        loop {
-            match listener.accept().await {
+        while let Some(conn) = listener.next().await {
+            match conn {
                 Ok(conn) => {
                     Executor::spawn(async {
                         if let Err(e) = handle_connection(conn).await {
@@ -167,6 +168,7 @@ fn main() -> anyhow::Result<()> {
                 Err(e) => error!("Could not accept incoming connection: {e:?}"),
             }
         }
+        eprintln!("Bye!");
     });
 
     Ok(())

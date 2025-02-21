@@ -1,6 +1,5 @@
 pub(crate) use io::UringIo;
 use io_uring::{squeue, CompletionQueue, IoUring};
-use log::info;
 use result::RingResults;
 use slab::Slab;
 use std::cell::{RefCell, RefMut};
