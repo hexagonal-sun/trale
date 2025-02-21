@@ -1,9 +1,7 @@
 use std::{cell::RefCell, task::Poll};
 
+use super::{IoKind, ReactorInner};
 use io_uring::squeue;
-use slab::Slab;
-
-use super::ReactorInner;
 
 #[derive(Debug)]
 enum IoState {
@@ -14,6 +12,7 @@ enum IoState {
 
 pub(crate) struct UringIo<'a, T> {
     state: IoState,
+    kind: IoKind,
     ring: &'a RefCell<ReactorInner<T>>,
 }
 
@@ -32,9 +31,10 @@ impl From<&IoState> for Poll<std::io::Result<i32>> {
 }
 
 impl<'a, T> UringIo<'a, T> {
-    pub(super) fn new(ring: &'a RefCell<ReactorInner<T>>) -> Self {
+    pub(super) fn new(ring: &'a RefCell<ReactorInner<T>>, kind: IoKind) -> Self {
         Self {
             state: IoState::New,
+            kind,
             ring,
         }
     }
@@ -46,14 +46,18 @@ impl<'a, T> UringIo<'a, T> {
         match self.state {
             IoState::New => {
                 let (entry, obj) = f();
-                let result_slot = self.ring.borrow_mut().submit_io(entry, obj);
+                let result_slot = self.ring.borrow_mut().submit_io(entry, obj, self.kind);
                 self.state = IoState::Submitted(result_slot);
             }
             IoState::Submitted(slot) => {
                 let mut ring = self.ring.borrow_mut();
-                if let Some(res) = ring.results.get_result(slot) {
-                    self.state = IoState::Finished(res);
-                    ring.results.drop_result(slot);
+                let result_store = ring.results.get(self.kind);
+
+                if let Some(res) = result_store.pop_result(slot) {
+                    match self.kind {
+                        IoKind::Oneshot => self.state = IoState::Finished(res),
+                        IoKind::Multi => return (&IoState::Finished(res)).into(),
+                    };
                 }
             }
             IoState::Finished(_) => {}
@@ -66,58 +70,11 @@ impl<'a, T> UringIo<'a, T> {
 impl<'a, T> Drop for UringIo<'a, T> {
     fn drop(&mut self) {
         if let IoState::Submitted(slot) = self.state {
-            self.ring.borrow_mut().results.drop_result(slot);
+            self.ring
+                .borrow_mut()
+                .results
+                .get(self.kind)
+                .drop_result(slot);
         }
-    }
-}
-
-pub struct RingResults(Slab<ResultState>);
-
-pub(super) enum ResultState {
-    Pending,
-    Set(i32),
-    Dropped,
-}
-
-impl RingResults {
-    pub fn new() -> Self {
-        Self(Slab::new())
-    }
-
-    #[cfg(test)]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn set_result(&mut self, result: i32, idx: usize) {
-        let r_entry = self.0.get_mut(idx).unwrap();
-
-        if matches!(r_entry, ResultState::Dropped) {
-            self.0.remove(idx);
-        } else {
-            *r_entry = ResultState::Set(result);
-        }
-    }
-
-    pub fn get_result(&self, idx: usize) -> Option<i32> {
-        match self.0.get(idx).unwrap() {
-            ResultState::Pending => None,
-            ResultState::Set(result) => Some(*result),
-            ResultState::Dropped => panic!("Should not be able to get a dropped result"),
-        }
-    }
-
-    pub fn drop_result(&mut self, idx: usize) {
-        let r_entry = self.0.get_mut(idx).unwrap();
-
-        if matches!(r_entry, ResultState::Set(_)) {
-            self.0.remove(idx);
-        } else {
-            *r_entry = ResultState::Dropped;
-        }
-    }
-
-    pub fn create_slot(&mut self) -> usize {
-        self.0.insert(ResultState::Pending)
     }
 }

@@ -117,8 +117,9 @@ impl Wake for TaskId {
     fn wake(self: Arc<TaskId>) {
         EXEC.with(|exec| {
             let mut exec = exec.borrow_mut();
-            let task = exec.waiting.remove(self.0.load(Ordering::Relaxed));
-            exec.run_q.push(task);
+            if let Some(task) = exec.waiting.try_remove(self.0.load(Ordering::Relaxed)) {
+                exec.run_q.push(task);
+            }
         });
     }
 }

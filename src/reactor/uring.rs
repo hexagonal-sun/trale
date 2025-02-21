@@ -1,16 +1,18 @@
-use io::RingResults;
 pub(crate) use io::UringIo;
 use io_uring::{squeue, CompletionQueue, IoUring};
+use log::info;
+use result::RingResults;
 use slab::Slab;
 use std::cell::{RefCell, RefMut};
 
 mod io;
+mod result;
 
-pub struct ReactorUring<T> {
+pub struct ReactorUring<T: Clone> {
     inner: RefCell<ReactorInner<T>>,
 }
 
-impl<T> ReactorUring<T> {
+impl<T: Clone> ReactorUring<T> {
     pub fn new() -> Self {
         Self {
             inner: RefCell::new(ReactorInner::new()),
@@ -18,7 +20,11 @@ impl<T> ReactorUring<T> {
     }
 
     pub fn new_io(&self) -> UringIo<'_, T> {
-        UringIo::new(&self.inner)
+        UringIo::new(&self.inner, IoKind::Oneshot)
+    }
+
+    pub fn new_multishot_io(&self) -> UringIo<'_, T> {
+        UringIo::new(&self.inner, IoKind::Multi)
     }
 
     pub fn react(&self) -> IoCompletionIter<'_, T> {
@@ -35,12 +41,9 @@ impl<T> ReactorUring<T> {
             )
         };
 
-        let (pending, results) = RefMut::map_split(borrow, |x| (&mut x.pending, &mut x.results));
-
         IoCompletionIter {
             compl_queue,
-            pending,
-            results,
+            ring: borrow,
         }
     }
 }
@@ -51,11 +54,13 @@ struct ReactorInner<T> {
     results: RingResults,
 }
 
+#[derive(Clone, Copy)]
 enum IoKind {
     Oneshot,
     Multi,
 }
 
+#[derive(Clone)]
 struct PendingIo<T> {
     assoc_obj: T,
     result_slab_idx: usize,
@@ -71,12 +76,13 @@ impl<T> ReactorInner<T> {
         }
     }
 
-    fn submit_io(&mut self, entry: squeue::Entry, obj: T) -> usize {
-        let result_slab_idx = self.results.create_slot();
+    fn submit_io(&mut self, entry: squeue::Entry, obj: T, kind: IoKind) -> usize {
+        let result_slab_idx = self.results.get(kind).create_slot();
 
         let slot = self.pending.insert(PendingIo {
             assoc_obj: obj,
             result_slab_idx,
+            kind,
         });
 
         unsafe {
@@ -90,20 +96,32 @@ impl<T> ReactorInner<T> {
     }
 }
 
-pub struct IoCompletionIter<'a, T> {
+pub struct IoCompletionIter<'a, T: Clone> {
     compl_queue: CompletionQueue<'a>,
-    pending: RefMut<'a, Slab<PendingIo<T>>>,
-    results: RefMut<'a, RingResults>,
+    ring: RefMut<'a, ReactorInner<T>>,
 }
 
-impl<T> Iterator for IoCompletionIter<'_, T> {
+impl<T: Clone> Iterator for IoCompletionIter<'_, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
         let entry = self.compl_queue.next()?;
 
-        let pending_io = self.pending.remove(entry.user_data() as usize);
-        self.results.set_result(entry.result(), pending_io.result_slab_idx);
+        let pending_io = self
+            .ring
+            .pending
+            .get_mut(entry.user_data() as usize)
+            .unwrap()
+            .clone();
+
+        self.ring
+            .results
+            .get(pending_io.kind)
+            .set_result(entry.result(), pending_io.result_slab_idx);
+
+        if let IoKind::Oneshot = pending_io.kind {
+            self.ring.pending.remove(entry.user_data() as usize);
+        }
 
         Some(pending_io.assoc_obj)
     }

@@ -16,6 +16,10 @@ impl Reactor {
         REACTOR.with(|r| unsafe { transmute(r.new_io()) })
     }
 
+    pub fn new_multishot_io() -> ReactorIo {
+        REACTOR.with(|r| unsafe { transmute(r.new_multishot_io()) })
+    }
+
     pub fn react() {
         REACTOR.with(|r| {
             for waker in r.react() {

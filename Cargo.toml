@@ -18,7 +18,9 @@ keywords = ["io", "async", "non-blocking", "futures"]
 io-uring = "0.7.4"
 libc = "0.2.167"
 log = "0.4.22"
+ringbuffer = "0.15.0"
 slab = "0.4.9"
+tokio-stream = { version = "0.1.17", default-features = false }
 
 [dev-dependencies]
 anyhow = "1.0.81"
