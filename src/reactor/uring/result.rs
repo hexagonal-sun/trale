@@ -1,22 +1,13 @@
 use ringbuffer::{ConstGenericRingBuffer, RingBuffer};
 use slab::Slab;
 
-use super::IoKind;
-
-pub trait ResultStore {
-    fn set_result(&mut self, result: i32, idx: usize);
-    fn pop_result(&mut self, idx: usize) -> Option<i32>;
-    fn drop_result(&mut self, idx: usize);
-    fn create_slot(&mut self) -> usize;
-}
-
 pub(super) enum ResultState {
     Pending,
     Set(i32),
     Dropped,
 }
 
-struct OneshotStore(Slab<ResultState>);
+pub(crate) struct OneshotStore(Slab<ResultState>);
 
 impl OneshotStore {
     pub fn new() -> Self {
@@ -27,10 +18,8 @@ impl OneshotStore {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
 
-impl ResultStore for OneshotStore {
-    fn set_result(&mut self, result: i32, idx: usize) {
+    pub fn set_result(&mut self, result: i32, idx: usize) {
         let r_entry = self.0.get_mut(idx).unwrap();
 
         if matches!(r_entry, ResultState::Dropped) {
@@ -40,7 +29,7 @@ impl ResultStore for OneshotStore {
         }
     }
 
-    fn pop_result(&mut self, idx: usize) -> Option<i32> {
+    pub fn get_result(&mut self, idx: usize) -> Option<i32> {
         let res = match self.0.get(idx).unwrap() {
             ResultState::Pending => None,
             ResultState::Set(result) => {
@@ -54,7 +43,7 @@ impl ResultStore for OneshotStore {
         res
     }
 
-    fn drop_result(&mut self, idx: usize) {
+    pub fn drop_result(&mut self, idx: usize) {
         let r_entry = self.0.get_mut(idx).unwrap();
 
         if matches!(r_entry, ResultState::Set(_)) {
@@ -64,17 +53,24 @@ impl ResultStore for OneshotStore {
         }
     }
 
-    fn create_slot(&mut self) -> usize {
+    pub fn create_slot(&mut self) -> usize {
         self.0.insert(ResultState::Pending)
     }
 }
 
-enum MultishotResultState {
-    Active(ConstGenericRingBuffer<i32, 1024>),
-    Dropped,
+struct MultishotResultState {
+    results: ConstGenericRingBuffer<i32, 1024>,
+    dropped: bool,
+    finished: bool,
 }
 
-struct MultishotStore(Slab<MultishotResultState>);
+pub enum MultishotResult {
+    Value(i32),
+    Pending,
+    Finished,
+}
+
+pub(crate) struct MultishotStore(Slab<MultishotResultState>);
 
 impl MultishotStore {
     fn new() -> Self {
@@ -85,37 +81,48 @@ impl MultishotStore {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-}
 
-impl ResultStore for MultishotStore {
-    fn set_result(&mut self, result: i32, idx: usize) {
-        let r_entry = self.0.get_mut(idx).unwrap();
+    pub fn push_result(&mut self, result: i32, idx: usize) {
+        self.0.get_mut(idx).unwrap().results.push(result);
+    }
 
-        match r_entry {
-            MultishotResultState::Active(ref mut ring) => {
-                ring.push(result);
+    pub fn pop_result(&mut self, idx: usize) -> MultishotResult {
+        let result = self.0.get_mut(idx).unwrap();
+
+        match result.results.dequeue() {
+            Some(v) => MultishotResult::Value(v),
+            None => {
+                if result.finished {
+                    MultishotResult::Finished
+                } else {
+                    MultishotResult::Pending
+                }
             }
-
-            // If the IO has been dropped, ignore any results.
-            MultishotResultState::Dropped => {}
         }
     }
 
-    fn pop_result(&mut self, idx: usize) -> Option<i32> {
-        match self.0.get_mut(idx).unwrap() {
-            MultishotResultState::Active(ref mut ring) => ring.dequeue(),
-            MultishotResultState::Dropped => panic!("Shoult not be able to get a dropped result"),
+    pub fn drop_result(&mut self, idx: usize) {
+        if self.0.get_mut(idx).unwrap().finished {
+            self.0.remove(idx);
+        } else {
+            self.0.get_mut(idx).unwrap().dropped = true;
         }
     }
 
-    fn drop_result(&mut self, idx: usize) {
-        let r_entry = self.0.get_mut(idx).unwrap();
-        *r_entry = MultishotResultState::Dropped;
+    pub fn create_slot(&mut self) -> usize {
+        self.0.insert(MultishotResultState {
+            results: ConstGenericRingBuffer::new(),
+            dropped: false,
+            finished: false,
+        })
     }
 
-    fn create_slot(&mut self) -> usize {
-        self.0
-            .insert(MultishotResultState::Active(ConstGenericRingBuffer::new()))
+    pub fn set_finished(&mut self, idx: usize) {
+        if self.0.get(idx).unwrap().dropped {
+            self.0.remove(idx);
+        } else {
+            self.0.get_mut(idx).unwrap().finished = true;
+        }
     }
 }
 
@@ -132,11 +139,12 @@ impl RingResults {
         }
     }
 
-    pub fn get(&mut self, kind: IoKind) -> &mut dyn ResultStore {
-        match kind {
-            IoKind::Oneshot => &mut self.oneshot,
-            IoKind::Multi => &mut self.multishot,
-        }
+    pub fn get_oneshot(&mut self) -> &mut OneshotStore {
+        &mut self.oneshot
+    }
+
+    pub fn get_multishot(&mut self) -> &mut MultishotStore {
+        &mut self.multishot
     }
 
     #[cfg(test)]

@@ -42,7 +42,7 @@ use io_uring::{opcode, types};
 use libc::{AF_INET, AF_INET6, SOCK_STREAM};
 use tokio_stream::Stream;
 
-use crate::reactor::{Reactor, ReactorIo};
+use crate::reactor::{MultishotReactorIo, Reactor, ReactorIo};
 
 use super::{
     read::{AsyncRead, AsyncReader},
@@ -56,7 +56,7 @@ use super::{
 /// accept connections on the specified address.
 pub struct TcpListener {
     inner: OwnedFd,
-    io: ReactorIo,
+    io: MultishotReactorIo,
 }
 
 fn mk_sock(addr: &SocketAddr) -> std::io::Result<OwnedFd> {
@@ -127,7 +127,7 @@ impl Stream for TcpListener {
                 )
             })
             .map(|x| {
-                Some({
+                x.map(|x| {
                     x.map(|fd| TcpStream {
                         inner: unsafe { OwnedFd::from_raw_fd(fd) },
                     })

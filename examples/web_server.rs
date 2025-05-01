@@ -134,12 +134,10 @@ async fn handle_connection(mut conn: TcpStream) -> anyhow::Result<()> {
 
     let file = if path == PathBuf::from("/") {
         ARGS.get().unwrap().webroot.join("index.html")
+    } else if let Ok(path) = path.strip_prefix("/") {
+        ARGS.get().unwrap().webroot.join(path)
     } else {
-        if let Ok(path) = path.strip_prefix("/") {
-            ARGS.get().unwrap().webroot.join(path)
-        } else {
-            return send_response_hdr(&mut conn, Response::NotFound, 0).await;
-        }
+        return send_response_hdr(&mut conn, Response::NotFound, 0).await;
     };
 
     send_file(conn, file).await

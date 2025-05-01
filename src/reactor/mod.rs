@@ -1,9 +1,11 @@
-use std::{mem::transmute, task::Waker};
-use uring::{ReactorUring, UringIo};
+use std::task::Waker;
+
+use uring::{MultishotUringIo, OneshotUringIo, ReactorUring};
 
 mod uring;
 
-pub type ReactorIo = UringIo<'static, Waker>;
+pub type ReactorIo = OneshotUringIo<Waker>;
+pub type MultishotReactorIo = MultishotUringIo<Waker>;
 
 pub(crate) struct Reactor {}
 
@@ -13,11 +15,11 @@ thread_local! {
 
 impl Reactor {
     pub fn new_io() -> ReactorIo {
-        REACTOR.with(|r| unsafe { transmute(r.new_io()) })
+        REACTOR.with(|r| r.new_oneshot_io())
     }
 
-    pub fn new_multishot_io() -> ReactorIo {
-        REACTOR.with(|r| unsafe { transmute(r.new_multishot_io()) })
+    pub fn new_multishot_io() -> MultishotReactorIo {
+        REACTOR.with(|r| r.new_multishot_io())
     }
 
     pub fn react() {

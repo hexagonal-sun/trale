@@ -1,29 +1,32 @@
-pub(crate) use io::UringIo;
-use io_uring::{squeue, CompletionQueue, IoUring};
+pub(crate) use io::{multishot::MultishotUringIo, oneshot::OneshotUringIo};
+use io_uring::{cqueue, squeue, CompletionQueue, IoUring};
 use result::RingResults;
 use slab::Slab;
-use std::cell::{RefCell, RefMut};
+use std::{
+    cell::{RefCell, RefMut},
+    rc::Rc,
+};
 
 mod io;
 mod result;
 
 pub struct ReactorUring<T: Clone> {
-    inner: RefCell<ReactorInner<T>>,
+    inner: Rc<RefCell<ReactorInner<T>>>,
 }
 
 impl<T: Clone> ReactorUring<T> {
     pub fn new() -> Self {
         Self {
-            inner: RefCell::new(ReactorInner::new()),
+            inner: Rc::new(RefCell::new(ReactorInner::new())),
         }
     }
 
-    pub fn new_io(&self) -> UringIo<'_, T> {
-        UringIo::new(&self.inner, IoKind::Oneshot)
+    pub fn new_oneshot_io(&self) -> OneshotUringIo<T> {
+        OneshotUringIo::new(self.inner.clone())
     }
 
-    pub fn new_multishot_io(&self) -> UringIo<'_, T> {
-        UringIo::new(&self.inner, IoKind::Multi)
+    pub fn new_multishot_io(&self) -> MultishotUringIo<T> {
+        MultishotUringIo::new(self.inner.clone())
     }
 
     pub fn react(&self) -> IoCompletionIter<'_, T> {
@@ -47,7 +50,7 @@ impl<T: Clone> ReactorUring<T> {
     }
 }
 
-struct ReactorInner<T> {
+pub(crate) struct ReactorInner<T> {
     uring: IoUring,
     pending: Slab<PendingIo<T>>,
     results: RingResults,
@@ -75,8 +78,11 @@ impl<T> ReactorInner<T> {
         }
     }
 
-    fn submit_io(&mut self, entry: squeue::Entry, obj: T, kind: IoKind) -> usize {
-        let result_slab_idx = self.results.get(kind).create_slot();
+    fn submit_io(&mut self, entry: squeue::Entry, obj: T, kind: IoKind) -> (u64, usize) {
+        let result_slab_idx = match kind {
+            IoKind::Oneshot => self.results.get_oneshot().create_slot(),
+            IoKind::Multi => self.results.get_multishot().create_slot(),
+        };
 
         let slot = self.pending.insert(PendingIo {
             assoc_obj: obj,
@@ -91,7 +97,7 @@ impl<T> ReactorInner<T> {
                 .unwrap();
         }
 
-        result_slab_idx
+        (slot as u64, result_slab_idx)
     }
 }
 
@@ -113,13 +119,21 @@ impl<T: Clone> Iterator for IoCompletionIter<'_, T> {
             .unwrap()
             .clone();
 
-        self.ring
-            .results
-            .get(pending_io.kind)
-            .set_result(entry.result(), pending_io.result_slab_idx);
-
-        if let IoKind::Oneshot = pending_io.kind {
-            self.ring.pending.remove(entry.user_data() as usize);
+        match pending_io.kind {
+            IoKind::Oneshot => {
+                self.ring
+                    .results
+                    .get_oneshot()
+                    .set_result(entry.result(), pending_io.result_slab_idx);
+                self.ring.pending.remove(entry.user_data() as usize);
+            }
+            IoKind::Multi => {
+                let results = self.ring.results.get_multishot();
+                results.push_result(entry.result(), pending_io.result_slab_idx);
+                if !cqueue::more(entry.flags()) {
+                    results.set_finished(pending_io.result_slab_idx);
+                }
+            }
         }
 
         Some(pending_io.assoc_obj)
@@ -189,7 +203,7 @@ mod tests {
         run_test(|a, b, uring| {
             let mut buf = [0];
 
-            let mut io = uring.new_io();
+            let mut io = uring.new_oneshot_io();
             let result = io.submit_or_get_result(|| {
                 (
                     opcode::Read::new(types::Fd(a.as_raw_fd()), buf.as_mut_ptr(), 1).build(),
@@ -224,7 +238,7 @@ mod tests {
         run_test(|a, b, uring| {
             let mut buf = [0];
 
-            let mut io = uring.new_io();
+            let mut io = uring.new_oneshot_io();
             assert!(matches!(
                 io.submit_or_get_result(|| {
                     (
@@ -255,7 +269,7 @@ mod tests {
         run_test(|a, b, uring| {
             let buf = [0];
 
-            let mut io = uring.new_io();
+            let mut io = uring.new_oneshot_io();
             let result = io.submit_or_get_result(|| {
                 (
                     opcode::Write::new(types::Fd(a.as_raw_fd()), buf.as_ptr(), buf.len() as _)
@@ -293,7 +307,7 @@ mod tests {
         run_test(|a, b, uring| {
             let mut buf = [0, 0];
 
-            let mut io1 = uring.new_io();
+            let mut io1 = uring.new_oneshot_io();
             assert!(matches!(
                 io1.submit_or_get_result(|| {
                     (
@@ -304,7 +318,7 @@ mod tests {
                 Poll::Pending
             ));
 
-            let mut io2 = uring.new_io();
+            let mut io2 = uring.new_oneshot_io();
             assert!(matches!(
                 io2.submit_or_get_result(|| {
                     (
@@ -344,7 +358,7 @@ mod tests {
         run_test(|a, b, uring| {
             let buf = [0xbe, 0xef];
 
-            let mut io1 = uring.new_io();
+            let mut io1 = uring.new_oneshot_io();
             assert!(matches!(
                 io1.submit_or_get_result(|| {
                     (
@@ -355,7 +369,7 @@ mod tests {
                 Poll::Pending
             ));
 
-            let mut io2 = uring.new_io();
+            let mut io2 = uring.new_oneshot_io();
             assert!(matches!(
                 io2.submit_or_get_result(|| {
                     (

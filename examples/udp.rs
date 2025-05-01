@@ -24,11 +24,11 @@ fn main() {
     });
 
     Executor::spawn(async {
-        let mut buf = [0xadu8; 20];
+        let buf = [0xadu8; 20];
         let udpsock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         Timer::sleep(Duration::from_secs(1)).unwrap().await;
         let len = udpsock
-            .send_to(&mut buf, (Ipv4Addr::LOCALHOST, 9998))
+            .send_to(&buf, (Ipv4Addr::LOCALHOST, 9998))
             .await
             .unwrap();
 
